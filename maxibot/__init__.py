@@ -13,6 +13,7 @@ from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 # from maxibot.core.attachments.photo import Photo
 from maxibot.core.network.polling import Polling
+from maxibot.core.network.webhook import WebhookServer
 
 
 HandlerFunc = Callable[[Message], None]
@@ -49,6 +50,7 @@ class MaxiBot:
         self.message_handlers = []
         self.callback_query_handlers = []
         self.poll = None
+        self._webhook: WebhookServer = None
         self.is_running = False
         self.count_retries = 10
         self._next_steps: Dict[int, StepHandler] = {}
@@ -69,19 +71,21 @@ class MaxiBot:
 
     def polling(self, allowed_updates: Optional[List[str]] = None):
         """
-        Функция, которая запускает корутину
+        Запускает получение обновлений через long polling.
         """
         asyncio.run(self.start(allowed_updates=allowed_updates))
 
     def stop(self):
         """
-        Метод останавливает поллинг бота
+        Останавливает polling или webhook-сервер бота
         """
         if not self.is_running:
             print("Bot is not running")
             return None
         if self.poll:
             self.poll.stop()
+        if self._webhook:
+            self._webhook.stop()
         self.is_running = False
 
     async def start(self, allowed_updates: Optional[List[str]] = None):
@@ -278,6 +282,84 @@ class MaxiBot:
             timestamp=time.time()
         )
         self._next_steps[message.from_user.id] = handler
+
+    # -------------------------------------------------------------------------
+    # Webhook
+    # -------------------------------------------------------------------------
+
+    def set_webhook(
+        self,
+        url: str,
+        secret: Optional[str] = None,
+        allowed_updates: Optional[List[str]] = None
+    ) -> dict:
+        """
+        Регистрирует webhook в MAX API.
+
+        :param url: Публичный HTTPS-адрес, на который MAX будет слать обновления
+        :param secret: Секрет для проверки заголовка X-Max-Bot-Api-Secret (5–256 символов)
+        :param allowed_updates: Список типов обновлений (None — все)
+        """
+        return self.api.set_webhook(url=url, update_types=allowed_updates, secret=secret)
+
+    def delete_webhook(self, url: str) -> dict:
+        """
+        Удаляет webhook-подписку из MAX API.
+
+        :param url: URL подписки для удаления
+        """
+        return self.api.delete_webhook(url=url)
+
+    def get_webhook_info(self) -> dict:
+        """
+        Возвращает список активных webhook-подписок.
+        """
+        return self.api.get_webhook_info()
+
+    def start_webhook(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 443,
+        secret: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        allowed_updates: Optional[List[str]] = None
+    ):
+        """
+        Запускает локальный HTTP-сервер для приёма обновлений через webhook.
+
+        :param host: Адрес для прослушивания (по умолчанию '0.0.0.0')
+        :param port: Порт для прослушивания (по умолчанию 443, как требует MAX)
+        :param secret: Секрет для валидации заголовка X-Max-Bot-Api-Secret (опционально)
+        :param webhook_url: Если указан — автоматически регистрирует этот URL в MAX API
+                            через POST /subscriptions
+        :param allowed_updates: Список типов обновлений (None — все)
+
+        Пример использования::
+
+            bot.start_webhook(
+                host="0.0.0.0",
+                port=443,
+                secret="my-secret",
+                webhook_url="https://example.com/webhook"
+            )
+        """
+        if self.is_running:
+            print("Bot is already running")
+            return
+
+        if webhook_url:
+            self.set_webhook(url=webhook_url, secret=secret, allowed_updates=allowed_updates)
+
+        self._webhook = WebhookServer(host=host, port=port, secret=secret)
+        self._webhook.start(handler=self._process_update)
+        self.is_running = True
+
+        try:
+            import time
+            while self.is_running:
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            self.stop()
 
     def send_photo(
         self,

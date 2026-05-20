@@ -157,6 +157,44 @@ class Api:
         """
         return self.client.request(method="POST", url=url, files=files, content_types=content_types)
 
+    def set_webhook(
+        self,
+        url: str,
+        update_types: Optional[List[str]] = None,
+        secret: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Регистрирует webhook-подписку в MAX API.
+
+        :param url: HTTPS-адрес, на который MAX будет отправлять обновления
+        :param update_types: Список типов обновлений для получения (None — все)
+        :param secret: Секрет для валидации заголовка X-Max-Bot-Api-Secret (5–256 символов)
+        :return: Ответ API
+        """
+        data: Dict[str, Any] = {"url": url}
+        if update_types:
+            data["update_types"] = update_types
+        if secret:
+            data["secret"] = secret
+        return self.client.request("POST", "/subscriptions", data=data)
+
+    def delete_webhook(self, url: str) -> Dict[str, Any]:
+        """
+        Удаляет webhook-подписку.
+
+        :param url: URL подписки для удаления
+        :return: Ответ API
+        """
+        return self.client.request("DELETE", "/subscriptions", params={"url": url})
+
+    def get_webhook_info(self) -> Dict[str, Any]:
+        """
+        Возвращает список активных webhook-подписок.
+
+        :return: Список подписок
+        """
+        return self.client.request("GET", "/subscriptions")
+
     def answer_callback(
             self,
             callback_id: str,
