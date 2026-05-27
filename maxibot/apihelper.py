@@ -95,7 +95,7 @@ class Api:
         else:
             data["attachments"] = []
 
-        if parse_mode:
+        if text and parse_mode:
             data["format"] = parse_mode
 
         if notify:

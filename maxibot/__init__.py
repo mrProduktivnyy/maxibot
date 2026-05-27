@@ -52,7 +52,7 @@ class MaxiBot:
         self.poll = None
         self._webhook: WebhookServer = None
         self.is_running = False
-        self.count_retries = 10
+
         self._next_steps: Dict[int, StepHandler] = {}
 
     @staticmethod
@@ -501,17 +501,12 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        for _ in range(self.count_retries):
-            response = self.api.send_message(
-                chat_id=chat_id,
-                text=caption,
-                attachments=final_attachments,
-                parse_mode=parse_mode.lower()
-            )
-            if isinstance(response, str):
-                time.sleep(1)
-                continue
-            break
+        response = self.api.send_message(
+            chat_id=chat_id,
+            text=caption,
+            attachments=final_attachments,
+            parse_mode=parse_mode.lower() if parse_mode else None
+        )
         return Message(update=response, api=self.api)
 
     def delete_message(
