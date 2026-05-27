@@ -11,7 +11,12 @@ from maxibot.apihelper import Api
 from maxibot.types import Message, CallbackQuery, InputMedia
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
-# from maxibot.core.attachments.photo import Photo
+from maxibot.exceptions import (
+    MaxApiException,
+    MaxApiHTTPException,
+    MaxApiInvalidJSONException,
+    MaxApiRequestException,
+)
 from maxibot.core.network.polling import Polling
 from maxibot.core.network.webhook import WebhookServer
 

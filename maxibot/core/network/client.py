@@ -3,6 +3,12 @@ import json
 
 from typing import Dict, Any, Optional
 
+from maxibot.exceptions import (
+    MaxApiHTTPException,
+    MaxApiInvalidJSONException,
+    MaxApiRequestException,
+)
+
 
 class Client:
     """
@@ -97,22 +103,23 @@ class Client:
             proxies=self.proxy,
             timeout=60
         )
+        function_name = f"{method} {path or url}"
+
         try:
             response.raise_for_status()
-            result = response.json()
-            # print(f"Response: {result}")
-            return result
-        except requests.exceptions.HTTPError as e:
-            error_text = f"HTTP error: {e}"
-            try:
-                error_json = response.json()
-                error_text = f"{error_text}, API response: {error_json}"
-            except Exception:
-                error_text = f"{error_text}, Response text: {response.text}"
+        except requests.exceptions.HTTPError:
+            raise MaxApiHTTPException(function_name=function_name, result=response)
 
-            print(error_text)
-            # raise Exception(error_text)
-            return error_text
-        except Exception as e:
-            print(f"Request error: {e}")
-            raise
+        try:
+            result = response.json()
+        except json.JSONDecodeError:
+            raise MaxApiInvalidJSONException(function_name=function_name, result=response)
+
+        if isinstance(result, dict) and result.get('code') and not result.get('success', True):
+            raise MaxApiRequestException(
+                function_name=function_name,
+                result=response,
+                result_json=result
+            )
+
+        return result
