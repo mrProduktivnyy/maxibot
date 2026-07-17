@@ -14,6 +14,8 @@ max: [Чат в Макс](https://max.ru/join/fCUIMAwLGdO_F1BY4rTdHQ54_D8PaZyjLn
 
 tg: [t.me/maxibot_dev](https://t.me/maxibot_dev)
 
+**При нестабильной работе ботов смотрите docs/cert.md**
+
 ## Быстрый старт
 Необходимо установить библиотеку  
 ```sh
