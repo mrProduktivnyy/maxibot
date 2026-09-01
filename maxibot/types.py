@@ -183,6 +183,209 @@ class InlineKeyboardMarkup:
                 )
 
 
+class KeyboardButton:
+    """
+    Кнопка reply-клавиатуры. Сигнатура один в один с telebot.KeyboardButton.
+
+    В MAX нет системной reply-клавиатуры, поэтому кнопка превращается
+    в кнопку inline-клавиатуры:
+
+    * обычная текстовая — {"type": "message"}: по нажатию отправляет
+      текст кнопки в чат, как reply-кнопка в Telegram;
+    * request_contact=True — {"type": "request_contact"}: запрашивает
+      контакт и номер телефона пользователя;
+    * request_location=True — {"type": "request_geo_location"}:
+      запрашивает местоположение пользователя.
+
+    Если заданы оба request-флага, приоритет у request_contact.
+
+    :param text: Текст кнопки (у обычной кнопки он же отправляется в чат)
+    :type text: str
+
+    :param request_contact: Если True, по нажатию бот получит контакт
+        пользователя
+    :type request_contact: Optional[bool]
+
+    :param request_location: Если True, по нажатию бот получит
+        местоположение пользователя
+    :type request_location: Optional[bool]
+
+    :param request_poll: Принимается для совместимости с telebot и
+        игнорируется — опросов в MAX Bot API нет, кнопка станет обычной
+        текстовой
+    :type request_poll: Optional[Any]
+
+    :param web_app: Принимается для совместимости с telebot и
+        игнорируется — web app на reply-кнопке MAX не поддерживает,
+        кнопка станет обычной текстовой
+    :type web_app: Optional[Any]
+
+    :param request_user: Принимается для совместимости с telebot и
+        игнорируется
+    :type request_user: Optional[Any]
+
+    :param request_chat: Принимается для совместимости с telebot и
+        игнорируется
+    :type request_chat: Optional[Any]
+
+    :param request_users: Принимается для совместимости с telebot и
+        игнорируется
+    :type request_users: Optional[Any]
+    """
+
+    def __init__(
+            self,
+            text: str,
+            request_contact: Optional[bool] = None,
+            request_location: Optional[bool] = None,
+            request_poll: Optional[Any] = None,
+            web_app: Optional[Any] = None,
+            request_user: Optional[Any] = None,
+            request_chat: Optional[Any] = None,
+            request_users: Optional[Any] = None,
+    ):
+        self.text = text
+        self.request_contact = request_contact
+        self.request_location = request_location
+        self.request_poll = request_poll
+        self.web_app = web_app
+        self.request_user = request_user
+        self.request_chat = request_chat
+        self.request_users = request_users
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Преобразует кнопку в словарь для отправки в MAX API
+
+        :return: Словарь с данными кнопки в формате MAX API
+        :rtype: Dict[str, Any]
+        """
+        if self.request_contact:
+            return {"type": "request_contact", "text": self.text}
+        if self.request_location:
+            return {"type": "request_geo_location", "text": self.text}
+        return {"type": "message", "text": self.text}
+
+    def is_special(self) -> bool:
+        """
+        Проверяет, является ли кнопка специальной (ограничивает ряд до 3 кнопок)
+
+        :return: True если кнопка запрашивает контакт или местоположение
+        :rtype: bool
+        """
+        return bool(self.request_contact or self.request_location)
+
+
+class ReplyKeyboardMarkup(InlineKeyboardMarkup):
+    """
+    Reply-клавиатура. Сигнатура один в один с telebot.ReplyKeyboardMarkup:
+    add() и row() принимают строки, bytes и KeyboardButton.
+
+    В MAX нет системной reply-клавиатуры, поэтому она отправляется как
+    inline-клавиатура с кнопками типа "message" — по нажатию текст кнопки
+    уходит в чат, и бот получает его обычным сообщением, как в Telegram.
+    Клавиатура при этом прикреплена к сообщению, а не к полю ввода.
+
+    Пример, один в один с telebot:
+
+        markup = ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("Да", "Нет")
+        bot.send_message(chat_id, "Продолжаем?", reply_markup=markup)
+
+    :param resize_keyboard: Принимается для совместимости с telebot и
+        игнорируется — в MAX клавиатура прикреплена к сообщению, размер
+        задаёт клиент
+    :type resize_keyboard: Optional[bool]
+
+    :param one_time_keyboard: Принимается для совместимости с telebot и
+        игнорируется
+    :type one_time_keyboard: Optional[bool]
+
+    :param selective: Принимается для совместимости с telebot и
+        игнорируется
+    :type selective: Optional[bool]
+
+    :param row_width: Ширина ряда по умолчанию (сколько кнопок в ряду)
+    :type row_width: int
+
+    :param input_field_placeholder: Принимается для совместимости с
+        telebot и игнорируется — поля ввода с плейсхолдером в MAX нет
+    :type input_field_placeholder: Optional[str]
+
+    :param is_persistent: Принимается для совместимости с telebot и
+        игнорируется
+    :type is_persistent: Optional[bool]
+    """
+    max_row_keys = 12  # атрибут telebot, оставлен для совместимости
+
+    def __init__(
+            self,
+            resize_keyboard: Optional[bool] = None,
+            one_time_keyboard: Optional[bool] = None,
+            selective: Optional[bool] = None,
+            row_width: int = 3,
+            input_field_placeholder: Optional[str] = None,
+            is_persistent: Optional[bool] = None,
+    ):
+        super().__init__(row_width=row_width)
+        self.resize_keyboard = resize_keyboard
+        self.one_time_keyboard = one_time_keyboard
+        self.selective = selective
+        self.input_field_placeholder = input_field_placeholder
+        self.is_persistent = is_persistent
+
+    def add(self, *args, row_width=None) -> 'ReplyKeyboardMarkup':
+        """
+        Добавляет кнопки в клавиатуру, автоматически разбивая на ряды.
+        Как в telebot, кнопкой может быть строка, bytes или KeyboardButton.
+
+        :param args: Кнопки для добавления
+        :type args: Union[str, bytes, KeyboardButton]
+
+        :param row_width: Ширина ряда для этих кнопок (если не указано,
+            используется self.row_width)
+        :type row_width: Optional[int]
+
+        :return: Текущий объект клавиатуры (для цепочки вызовов)
+        :rtype: ReplyKeyboardMarkup
+        """
+        buttons = [self._normalize_button(button) for button in args]
+        super().add(*buttons, row_width=row_width)
+        return self
+
+    def row(self, *args) -> 'ReplyKeyboardMarkup':
+        """
+        Добавляет ряд кнопок в клавиатуру.
+        Как в telebot, кнопкой может быть строка, bytes или KeyboardButton.
+
+        :param args: Кнопки для добавления в ряд
+        :type args: Union[str, bytes, KeyboardButton]
+
+        :return: Текущий объект клавиатуры (для цепочки вызовов)
+        :rtype: ReplyKeyboardMarkup
+        """
+        buttons = [self._normalize_button(button) for button in args]
+        super().row(*buttons)
+        return self
+
+    @staticmethod
+    def _normalize_button(button) -> KeyboardButton:
+        """
+        Приводит строку/bytes к KeyboardButton (как это делает telebot)
+
+        :param button: Кнопка в любом поддерживаемом виде
+        :type button: Union[str, bytes, KeyboardButton]
+
+        :return: Объект кнопки
+        :rtype: KeyboardButton
+        """
+        if isinstance(button, KeyboardButton):
+            return button
+        if isinstance(button, bytes):
+            return KeyboardButton(button.decode("utf-8"))
+        return KeyboardButton(str(button))
+
+
 class ImagePayload(JsonDeserializable):
     """
     Класс для хранения данных изображения
