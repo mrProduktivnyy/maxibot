@@ -1,7 +1,9 @@
 import asyncio
 # import json
 import logging
+import queue
 import re
+import threading
 import time
 import traceback
 
@@ -36,17 +38,68 @@ class StepHandler:
     timestamp: float
 
 
+class _WorkerPool:
+    """
+    Пул демон-потоков для выполнения обработчиков — аналог util.ThreadPool
+    из telebot. Именно демон-потоки (ThreadPoolExecutor так не умеет):
+    как и в telebot, Ctrl+C завершает процесс сразу, не дожидаясь
+    зависших или стоящих в очереди обработчиков.
+    """
+
+    def __init__(self, num_threads: int):
+        self._queue = queue.Queue()
+        self._threads = []
+        for i in range(num_threads):
+            thread = threading.Thread(
+                target=self._worker, name=f"maxibot-worker_{i}", daemon=True
+            )
+            thread.start()
+            self._threads.append(thread)
+
+    def submit(self, task: Callable, *args, **kwargs):
+        self._queue.put((task, args, kwargs))
+
+    def _worker(self):
+        while True:
+            task, args, kwargs = self._queue.get()
+            try:
+                task(*args, **kwargs)
+            except Exception:
+                # страховка, чтобы поток пула не умер; сами обработчики
+                # уже обёрнуты в MaxiBot._run_task
+                print(f"Error while processing update: {traceback.format_exc()}")
+            finally:
+                self._queue.task_done()
+
+
 class MaxiBot:
     """
     Главный класс бота
     """
-    def __init__(self, token: str):
+    def __init__(self, token: str, threaded: bool = True, num_threads: int = 2):
         """
         Метод инициализации бота
+
         :param token: Токен бота
         :type token: str
+
+        :param threaded: Как в telebot: если True (по умолчанию),
+            обработчики выполняются в пуле потоков и медленный обработчик
+            не блокирует остальных пользователей. False — прежняя
+            последовательная обработка в потоке поллинга
+        :type threaded: bool
+
+        :param num_threads: Размер пула потоков для обработчиков
+            (используется при threaded=True). По умолчанию 2, как в telebot
+        :type num_threads: int
         """
         self.api = Api(token=token)
+        self.threaded = threaded
+        self.num_threads = num_threads
+        if threaded:
+            self._worker_pool = _WorkerPool(num_threads=num_threads)
+        else:
+            self._worker_pool = None
         self.handlers = {
             "update": [],  # Общие обработчики для всех типов обновлений
             UpdateType.MESSAGE_CREATED: [],
@@ -259,7 +312,7 @@ class MaxiBot:
         """
         for handler in message_handlers:
             if self._check_filters(context=context, handler=handler):
-                handler.get("function")(context)
+                self._exec_task(handler.get("function"), context)
                 break
 
     def _test_filter(self, message_filter: str, filter_value: List, context: Message):
@@ -350,9 +403,12 @@ class MaxiBot:
             if update_type == UpdateType.MESSAGE_CREATED and "message" in update.keys() or \
                update_type == UpdateType.BOT_STARTED or update_type == UpdateType.BOT_ADDED:
                 context = Message(update, self.api)
-                if context.from_user.id in self._next_steps:
-                    handler = self._next_steps.pop(context.from_user.id)
-                    handler.callback(context, *handler.args, **handler.kwargs)
+                # атомарный pop вместо `in` + pop: clear_step_handler может
+                # выполняться в воркере параллельно и убрать ключ между
+                # проверкой и извлечением — сообщение тогда потерялось бы
+                handler = self._next_steps.pop(context.from_user.id, None)
+                if handler is not None:
+                    self._exec_task(handler.callback, context, *handler.args, **handler.kwargs)
                 else:
                     self._process_text_message(context)
             elif update_type == UpdateType.MESSAGE_CALLBACK:
@@ -361,6 +417,29 @@ class MaxiBot:
                     callback = CallbackQuery(update, self.api)
                     # print(f"Created callback: id={callback.id}, data={callback.data}")
                     self._process_callback_query(callback)
+        except Exception:
+            print(f"Error while processing update: {traceback.format_exc()}")
+
+    def _exec_task(self, task: Callable, *args, **kwargs):
+        """
+        Выполняет пользовательский обработчик: при threaded=True — в пуле
+        потоков (как telebot), иначе синхронно в текущем потоке. Фильтры
+        при этом всегда проверяются в потоке поллинга, в пул уходит
+        только сам обработчик.
+        """
+        if getattr(self, "_worker_pool", None):
+            self._worker_pool.submit(self._run_task, task, *args, **kwargs)
+        else:
+            self._run_task(task, *args, **kwargs)
+
+    @staticmethod
+    def _run_task(task: Callable, *args, **kwargs):
+        """
+        Вызов обработчика с перехватом ошибок: исключение в потоке пула
+        иначе молча потерялось бы внутри Future.
+        """
+        try:
+            task(*args, **kwargs)
         except Exception:
             print(f"Error while processing update: {traceback.format_exc()}")
 
@@ -1180,7 +1259,7 @@ class MaxiBot:
             # print(f"Checking handler with filters: {handler['filters']}")
             if self._check_filters(callback, handler):
                 # print("Handler matched! Calling function...")
-                handler["function"](callback)
+                self._exec_task(handler["function"], callback)
                 break
         else:
             print("No matching handler found for callback")
