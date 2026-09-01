@@ -16,6 +16,7 @@ from maxibot.exceptions import (
     MaxApiHTTPException,
     MaxApiInvalidJSONException,
     MaxApiRequestException,
+    MaxApiNotReadyException,
 )
 from maxibot.core.network.polling import Polling
 from maxibot.core.network.webhook import WebhookServer
@@ -57,7 +58,14 @@ class MaxiBot:
         self.poll = None
         self._webhook: WebhookServer = None
         self.is_running = False
-
+        self.count_retries = 10  # устарело, оставлено для совместимости
+        # Сколько секунд повторять отправку сообщения, пока MAX обрабатывает
+        # загруженное вложение (ошибка attachment.not.ready). Файлы от
+        # нескольких мегабайт обрабатываются заметно дольше 10 секунд.
+        self.send_retry_timeout = 120
+        # Сколько секунд ждать фактической публикации сообщения с файлом в
+        # чате, чтобы следующие отправленные сообщения не появились раньше него.
+        self.publish_wait_timeout = 10
         self._next_steps: Dict[int, StepHandler] = {}
 
     @staticmethod
@@ -366,6 +374,100 @@ class MaxiBot:
         except KeyboardInterrupt:
             self.stop()
 
+    def _send_attachments(self, chat_id, text, attachments, parse_mode):
+        """
+        Отправляет сообщение с вложениями, повторяя отправку, пока MAX
+        обрабатывает загруженный файл (ошибка ``attachment.not.ready``).
+
+        Вложение при этом повторно не загружается — используется уже
+        полученный токен. Если API так и не принял сообщение за
+        ``send_retry_timeout`` секунд, выбрасывается ``MaxApiNotReadyException``
+        вместо возврата пустого объекта Message без атрибутов.
+        """
+        deadline = time.monotonic() + self.send_retry_timeout
+        pause = 1
+        while True:
+            try:
+                response = self.api.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    attachments=attachments,
+                    parse_mode=parse_mode
+                )
+                break
+            except MaxApiException as exc:
+                if not self._is_attachment_not_ready(exc):
+                    raise
+                if time.monotonic() + pause > deadline:
+                    raise MaxApiNotReadyException(
+                        f"MAX API не принял сообщение за {self.send_retry_timeout} c "
+                        f"(вложение не обработано): {exc}",
+                        function_name=getattr(exc, "function_name", None),
+                        result=getattr(exc, "result", None)
+                    ) from exc
+                time.sleep(pause)
+                pause = min(pause + 1, 5)
+
+        message = Message(update=response, api=self.api)
+        self._wait_message_published(message)
+        return message
+
+    def _wait_message_published(self, message):
+        """
+        Ждёт, пока отправленное сообщение с файлом станет видно в чате.
+
+        MAX публикует сообщение с файловым вложением только после окончания
+        обработки файла, поэтому сообщение, отправленное следом, может
+        появиться в чате раньше него. Ожидание сохраняет порядок отправки.
+        Если сообщение уже опубликовано (обычный случай), проверка занимает
+        один запрос без пауз; по истечении ``publish_wait_timeout`` ожидание
+        прекращается без ошибки.
+        """
+        message_id = getattr(message, "message_id", None)
+        if not message_id:
+            return
+        deadline = time.monotonic() + self.publish_wait_timeout
+        while True:
+            try:
+                info = self.api.get_message(message_id)
+                if isinstance(info, dict) and self._file_attachments_ready(info):
+                    return
+            except MaxApiException:
+                # Сообщение ещё не опубликовано (например, 404) — продолжаем ждать.
+                pass
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(1)
+
+    @staticmethod
+    def _file_attachments_ready(info):
+        """
+        Проверяет, что у файловых вложений сообщения появился url — признак
+        того, что обработка файла закончена и сообщение опубликовано.
+        """
+        body = (info.get("message") or info).get("body") or {}
+        for attachment in body.get("attachments") or []:
+            if attachment.get("type") == "file" and not (attachment.get("payload") or {}).get("url"):
+                return False
+        return True
+
+    @staticmethod
+    def _is_attachment_not_ready(exc):
+        """
+        Определяет, что ошибка API — это ``attachment.not.ready`` (файл ещё
+        обрабатывается на стороне MAX), а не какая-то другая ошибка.
+        """
+        if "attachment.not.ready" in str(exc):
+            return True
+        result = getattr(exc, "result", None)
+        text = getattr(result, "text", "") or ""
+        if "attachment.not.ready" in text:
+            return True
+        result_json = getattr(exc, "result_json", None)
+        if isinstance(result_json, dict) and result_json.get("code") == "attachment.not.ready":
+            return True
+        return False
+
     def send_photo(
         self,
         chat_id: Union[int, str],
@@ -398,21 +500,14 @@ class MaxiBot:
         final_attachments = []
         if isinstance(photo, InputMedia):
             final_attachments.append(photo.to_dict(api=self.api))
-        final_attachments.append(InputMedia(media=photo).to_dict(api=self.api))
+        else:
+            final_attachments.append(InputMedia(media=photo).to_dict(api=self.api))
         if reply_markup:
             if hasattr(reply_markup, 'to_attachment'):
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return Message(
-            update=self.api.send_message(
-                chat_id=chat_id,
-                text=caption,
-                attachments=final_attachments,
-                parse_mode=parse_mode
-            ),
-            api=self.api
-        )
+        return self._send_attachments(chat_id, caption, final_attachments, parse_mode)
 
     def send_media_group(
         self,
@@ -454,15 +549,7 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return Message(
-            update=self.api.send_message(
-                chat_id=chat_id,
-                text=caption,
-                attachments=final_attachments,
-                parse_mode=parse_mode
-            ),
-            api=self.api
-        )
+        return self._send_attachments(chat_id, caption, final_attachments, parse_mode)
 
     def send_document(
         self,
@@ -506,13 +593,10 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        response = self.api.send_message(
-            chat_id=chat_id,
-            text=caption,
-            attachments=final_attachments,
-            parse_mode=parse_mode.lower() if parse_mode else None
+        return self._send_attachments(
+            chat_id, caption, final_attachments,
+            parse_mode.lower() if parse_mode else None
         )
-        return Message(update=response, api=self.api)
 
     def delete_message(
         self,

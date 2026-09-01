@@ -56,3 +56,17 @@ class MaxApiRequestException(MaxApiException):
         self.result_json = result_json
         self.error_code: str = result_json.get('code')
         self.description: str = result_json.get('message')
+
+
+class MaxApiNotReadyException(MaxApiException):
+    """
+    Загруженное вложение не было обработано MAX за отведённое время.
+
+    MAX обрабатывает загруженный файл асинхронно и до окончания обработки
+    отклоняет отправку сообщения с ошибкой ``attachment.not.ready``.
+    Бросается, когда бюджет ретраев (``bot.send_retry_timeout``) исчерпан,
+    а файл так и не был готов.
+    """
+
+    def __init__(self, msg: str, function_name: str = None, result=None):
+        super().__init__(msg, function_name, result)
