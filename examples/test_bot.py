@@ -8,7 +8,8 @@
 Команды для проверки в чате с ботом:
     /start          — приветствие, проверка send_message
     /info           — информация о боте, проверка get_me
-    /photo          — отправка фото по URL, проверка send_photo
+    /photo          — отправка фото из файла, проверка send_photo
+    /photourl       — отправка фото по URL-строке, проверка send_photo
     /document       — отправка документа, проверка send_document
     /video          — отправка видео, проверка send_video
                       (нужен путь к mp4 в переменной MAX_TEST_VIDEO)
@@ -57,6 +58,7 @@ def cmd_start(message):
         "/start — это сообщение\n"
         "/info — информация о боте\n"
         "/photo — тест send\\_photo\n"
+        "/photourl — тест send\\_photo по URL\n"
         "/document — тест send\\_document\n"
         "/video — тест send\\_video\n"
         "/keyboard — тест inline-клавиатуры\n"
@@ -96,6 +98,19 @@ def cmd_photo(message):
         chat_id=message.chat.id,
         photo=photo_bytes,
         caption="Тест send\\_photo"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /photourl — send_photo по URL-строке
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["photourl"])
+def cmd_photourl(message):
+    bot.send_photo(
+        chat_id=message.chat.id,
+        photo="https://raw.githubusercontent.com/mrProduktivnyy/maxibot/main/maxibot/docs/tg_to_max.png",
+        caption="Тест send\\_photo по URL — MAX скачал картинку сам"
     )
 
 

@@ -585,8 +585,10 @@ class InputMedia(JsonDeserializable):
     :param type: Тип медиа (photo/file/video)
     :type type: str
 
-    :param media: Байты медиа
-    :type media: bytes
+    :param media: Байты медиа; для фото — также строка: прямая
+        http(s)-ссылка на изображение (MAX скачает его сам) или токен
+        ранее загруженного изображения (аналог file_id)
+    :type media: Union[bytes, str]
 
     :param caption: Подпись к медиа
     :type caption: Optional[str]
@@ -653,6 +655,15 @@ class InputMedia(JsonDeserializable):
         :rtype: Dict[str, Any]
         """
         self.api = api
+        if self.type == "photo" and isinstance(self.media, str):
+            # Строка — как в telebot: http(s)-ссылка или токен ранее
+            # загруженного изображения (аналог file_id, лежит в
+            # message.photo.payload.token). Оба варианта MAX принимает
+            # без POST /uploads, но только для изображений: видео, аудио
+            # и файлы MAX принимает исключительно токеном загрузки
+            if self.media.startswith(("http://", "https://")):
+                return {"type": "image", "payload": {"url": self.media}}
+            return {"type": "image", "payload": {"token": self.media}}
         upload = self._get_upload_url(type_attach=self.type)
         upload_url = upload.get("url")
         if not upload_url:
