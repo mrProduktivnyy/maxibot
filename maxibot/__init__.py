@@ -409,7 +409,7 @@ class MaxiBot:
         except KeyboardInterrupt:
             self.stop()
 
-    def _send_attachments(self, chat_id, text, attachments, parse_mode):
+    def _send_attachments(self, chat_id, text, attachments, parse_mode, disable_link_preview=None):
         """
         Отправляет сообщение с вложениями, повторяя отправку, пока MAX
         обрабатывает загруженный файл (ошибка ``attachment.not.ready``).
@@ -427,7 +427,8 @@ class MaxiBot:
                     chat_id=chat_id,
                     text=text,
                     attachments=attachments,
-                    parse_mode=parse_mode
+                    parse_mode=parse_mode,
+                    disable_link_preview=disable_link_preview
                 )
                 break
             except MaxApiException as exc:
@@ -509,7 +510,8 @@ class MaxiBot:
         photo: Union[Any, str],
         caption: Optional[str] = None,
         parse_mode: Optional[str] = None,
-        reply_markup: Union[InlineKeyboardMarkup, Any] = None
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_web_page_preview: Optional[bool] = None
     ):
         """
         Отправляет сообщение с фото
@@ -525,6 +527,11 @@ class MaxiBot:
 
         :param parse_mode: Разметка сообщения
         :type parse_mode: Optional[str]
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в подписи (в MAX caption — это text того же POST /messages).
+            В telebot у send_photo параметра нет — расширение для MAX
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
@@ -542,7 +549,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return self._send_attachments(chat_id, caption, final_attachments, parse_mode)
+        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+                                      disable_link_preview=disable_web_page_preview)
 
     def send_media_group(
         self,
@@ -550,7 +558,8 @@ class MaxiBot:
         media: list,
         caption: Optional[str] = None,
         parse_mode: Optional[str] = None,
-        reply_markup: Union[InlineKeyboardMarkup, Any] = None
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_web_page_preview: Optional[bool] = None
     ):
         """
         Отправляет сообщение с фото
@@ -566,6 +575,11 @@ class MaxiBot:
 
         :param parse_mode: Разметка сообщения
         :type parse_mode: Optional[str]
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в подписи. В telebot у send_media_group параметра нет —
+            расширение для MAX
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
@@ -584,7 +598,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return self._send_attachments(chat_id, caption, final_attachments, parse_mode)
+        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+                                      disable_link_preview=disable_web_page_preview)
 
     def send_document(
         self,
@@ -593,7 +608,8 @@ class MaxiBot:
         caption: Optional[str] = None,
         parse_mode: Optional[str] = None,
         reply_markup: Union[InlineKeyboardMarkup, Any] = None,
-        visible_file_name: Optional[str] = None
+        visible_file_name: Optional[str] = None,
+        disable_web_page_preview: Optional[bool] = None
     ):
         """
         Отправляет сообщение с файлом
@@ -609,6 +625,11 @@ class MaxiBot:
 
         :param parse_mode: Разметка сообщения
         :type parse_mode: Optional[str]
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в подписи к файлу. В telebot у send_document параметра
+            нет — расширение для MAX
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
@@ -630,7 +651,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup)
         return self._send_attachments(
             chat_id, caption, final_attachments,
-            parse_mode.lower() if parse_mode else None
+            parse_mode.lower() if parse_mode else None,
+            disable_link_preview=disable_web_page_preview
         )
 
     def delete_message(
@@ -802,7 +824,8 @@ class MaxiBot:
         attachments: Optional[List[Dict[str, Any]]] = None,
         reply_markup: Optional[Any] = None,
         parse_mode: str = "markdown",
-        notify: bool = True
+        notify: bool = True,
+        disable_web_page_preview: Optional[bool] = None
     ) -> Message:
         """
         Отправляет ответ на текущее сообщение/обновление
@@ -815,6 +838,12 @@ class MaxiBot:
 
         :param keyboard: Объект клавиатуры (будет добавлен к attachments)
         :type keyboard:
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в тексте (имя параметра как в telebot; в MAX API это
+            query-параметр disable_link_preview). None — поведение сервера
+            по умолчанию
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Message
@@ -839,7 +868,8 @@ class MaxiBot:
                 text=text,
                 attachments=final_attachments,
                 parse_mode=parse_mode.lower(),
-                notify=notify
+                notify=notify,
+                disable_link_preview=disable_web_page_preview
             ),
             api=self.api
         )

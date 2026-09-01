@@ -63,7 +63,8 @@ class Api:
         method: str = "POST",
         attachments: Optional[List[Dict[str, Any]]] = None,
         parse_mode: str = "markdown",
-        notify: bool = True
+        notify: bool = True,
+        disable_link_preview: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Отправляет/удаляет/обновляет сообщение в чате
@@ -77,6 +78,12 @@ class Api:
         :param attachments: Вложения сообщения
         :type text: Optional[List[Dict[str, Any]]]
 
+        :param disable_link_preview: Если True, сервер не будет генерировать
+            превью для ссылок в тексте сообщения. Query-параметр MAX API,
+            есть только у POST /messages (у PUT/DELETE параметра нет).
+            None — параметр не отправляется, поведение сервера по умолчанию
+        :type disable_link_preview: Optional[bool]
+
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
         """
@@ -85,6 +92,11 @@ class Api:
             params = {"chat_id": chat_id}
         elif msg_id and method in ("DELETE", "PUT"):
             params = {"message_id": msg_id}
+
+        # disable_link_preview — только у POST /messages; requests сериализует
+        # Python bool как "True"/"False", MAX ждёт нижний регистр — шлём строкой
+        if method == "POST" and disable_link_preview is not None:
+            params["disable_link_preview"] = "true" if disable_link_preview else "false"
 
         data = {}
         if text:
@@ -204,6 +216,7 @@ class Api:
             link: Optional[Dict[str, Any]] = None,
             notify: bool = True,
             format: Optional[str] = None,
+            disable_link_preview: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Метод позволяет отправить уведомление пользователю и/или обновить
@@ -236,6 +249,12 @@ class Api:
 
         :param format: Формат текста сообщения. Доступные значения: "markdown", "html"
         :type format: Optional[str]
+
+        :param disable_link_preview: Если True, сервер не будет генерировать превью
+                                     для ссылок в тексте сообщения (query-параметр,
+                                     добавлен в MAX API в августе 2026).
+                                     None — параметр не отправляется
+        :type disable_link_preview: Optional[bool]
 
         :return: Ответ от MAX API
         :rtype: Dict[str, Any]
@@ -282,6 +301,12 @@ class Api:
         )
         """
         params = {"callback_id": callback_id}
+
+        # disable_link_preview у POST /answers появился в MAX API в августе 2026;
+        # как и у /messages — query-параметр, строкой в нижнем регистре
+        if disable_link_preview is not None:
+            params["disable_link_preview"] = "true" if disable_link_preview else "false"
+
         data: Dict[str, Any] = {}
 
         # Если нужно изменить сообщение (text, attachments, link, format)
