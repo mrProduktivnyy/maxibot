@@ -10,6 +10,8 @@
     /info           — информация о боте, проверка get_me
     /photo          — отправка фото по URL, проверка send_photo
     /document       — отправка документа, проверка send_document
+    /video          — отправка видео, проверка send_video
+                      (нужен путь к mp4 в переменной MAX_TEST_VIDEO)
     /keyboard       — inline-клавиатура, проверка InlineKeyboardMarkup
     /edit           — редактирование сообщения, проверка edit_message_text
     /delete         — удаление сообщения, проверка delete_message
@@ -50,6 +52,7 @@ def cmd_start(message):
         "/info — информация о боте\n"
         "/photo — тест send\\_photo\n"
         "/document — тест send\\_document\n"
+        "/video — тест send\\_video\n"
         "/keyboard — тест inline-клавиатуры\n"
         "/edit — тест edit\\_message\\_text\n"
         "/delete — тест delete\\_message\n"
@@ -101,6 +104,29 @@ def cmd_document(message):
         document=content,
         caption="Тест send\\_document",
         visible_file_name="test.txt"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /video — send_video
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["video"])
+def cmd_video(message):
+    video_path = os.getenv("MAX_TEST_VIDEO")
+    if not video_path or not os.path.exists(video_path):
+        bot.send_message(
+            message.chat.id,
+            "Для теста задай путь к mp4-файлу:\n"
+            "`export MAX_TEST_VIDEO=/путь/к/видео.mp4`"
+        )
+        return
+    with open(video_path, "rb") as f:
+        video_bytes = f.read()
+    bot.send_video(
+        chat_id=message.chat.id,
+        video=video_bytes,
+        caption="Тест send\\_video"
     )
 
 

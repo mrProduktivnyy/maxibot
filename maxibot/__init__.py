@@ -655,6 +655,83 @@ class MaxiBot:
             disable_link_preview=disable_web_page_preview
         )
 
+    def send_video(
+        self,
+        chat_id: Union[int, str],
+        video: Union[Any, str],
+        duration: Optional[int] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        thumbnail: Optional[Any] = None,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_web_page_preview: Optional[bool] = None
+    ):
+        """
+        Отправляет сообщение с видео. Порядок первых позиционных параметров —
+        как у telebot.send_video: (chat_id, video, duration, width, height,
+        thumbnail, caption, parse_mode).
+
+        Видео загружается в MAX через POST /uploads?type=video (форматы
+        MP4/MOV/MKV/WEBM, до 250 МБ), затем отправляется вложением
+        {"type": "video", "payload": {"token": ...}} в POST /messages.
+
+        :param chat_id: Чат, куда надо отправить сообщение
+        :type chat_id: Union[int, str]
+
+        :param video: Видео — байты или file-like объект
+        :type video: Union[Any, str]
+
+        :param duration: Принимается для совместимости с telebot и
+            игнорируется — MAX определяет длительность из самого файла
+        :type duration: Optional[int]
+
+        :param width: Принимается для совместимости с telebot и игнорируется —
+            MAX определяет ширину из самого файла
+        :type width: Optional[int]
+
+        :param height: Принимается для совместимости с telebot и игнорируется —
+            MAX определяет высоту из самого файла
+        :type height: Optional[int]
+
+        :param thumbnail: Принимается для совместимости с telebot и
+            игнорируется — Bot API MAX не позволяет задать обложку видео
+        :type thumbnail: Optional[Any]
+
+        :param caption: Текст сообщения под видео
+        :type caption: Optional[str]
+
+        :param parse_mode: Разметка сообщения
+        :type parse_mode: Optional[str]
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в подписи. В telebot у send_video параметра нет —
+            расширение для MAX
+        :type disable_web_page_preview: Optional[bool]
+
+        :return: Информация об отправленном сообщении
+        :rtype: Message
+        """
+
+        if self._check_text_length(text=caption):
+            raise ValueError(f'caption должен быть меньше 4000 символов.\nСейчас их {len(caption)}')
+        final_attachments = []
+        if isinstance(video, InputMedia) and video.type == "video":
+            final_attachments.append(video.to_dict(api=self.api))
+        else:
+            final_attachments.append(InputMedia(type="video", media=video).to_dict(api=self.api))
+        if reply_markup:
+            if hasattr(reply_markup, 'to_attachment'):
+                final_attachments.append(reply_markup.to_attachment())
+            else:
+                final_attachments.append(reply_markup)
+        return self._send_attachments(
+            chat_id, caption, final_attachments,
+            parse_mode.lower() if parse_mode else None,
+            disable_link_preview=disable_web_page_preview
+        )
+
     def delete_message(
         self,
         chat_id: Union[str, int],

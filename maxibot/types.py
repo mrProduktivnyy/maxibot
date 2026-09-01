@@ -379,7 +379,7 @@ class InputMedia(JsonDeserializable):
     """
     Класс формирования объекта attachments для отправки медиа
 
-    :param type: Тип медиа (photo/file)
+    :param type: Тип медиа (photo/file/video)
     :type type: str
 
     :param media: Байты медиа
@@ -393,7 +393,8 @@ class InputMedia(JsonDeserializable):
     """
     compare_types = {
         "photo": "image",
-        "file": "file"
+        "file": "file",
+        "video": "video"
     }
 
     def __init__(self, type: str = None, media: bytes = None, caption: str = None, parse_mode: str = None):
@@ -449,13 +450,18 @@ class InputMedia(JsonDeserializable):
         :rtype: Dict[str, Any]
         """
         self.api = api
-        upload_url = self._get_upload_url(type_attach=self.type).get("url")
+        upload = self._get_upload_url(type_attach=self.type)
+        upload_url = upload.get("url")
         if not upload_url:
             return []
         if is_pil_image(self.media):
             self.media = pil_image_to_bytes(self.media)
         load_file_result = self._load_file_to_max(url=upload_url, file_name=file_name)
-        if file_name:
+        if self.type == "video":
+            # у видео (и аудио) MAX отдаёт token сразу в ответе POST /uploads,
+            # ответ самой загрузки файла токена не содержит
+            token_dict = {"token": upload.get("token")}
+        elif file_name:
             token_dict = {"token": load_file_result.get("token")}
         else:
             token_dict = list(list(load_file_result.values())[0].values())[0]
