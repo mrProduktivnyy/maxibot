@@ -1202,3 +1202,159 @@ class MaxiBot:
             notification=text
         )
         return bool(response.get("success", False))
+
+    def answer_inline_query(
+        self,
+        inline_query_id: str,
+        results: List[Any],
+        cache_time: Optional[int] = None,
+        is_personal: Optional[bool] = None,
+        next_offset: Optional[str] = None,
+        switch_pm_text: Optional[str] = None,
+        switch_pm_parameter: Optional[str] = None,
+        button: Optional[Any] = None
+    ) -> bool:
+        """
+        Заглушка для совместимости с telebot: сигнатура один в один с
+        telebot.answer_inline_query, но вызов всегда бросает
+        NotImplementedError.
+
+        Инлайн-режима (@имя_бота запрос в поле ввода любого чата) в MAX
+        Bot API не существует: нет ни метода ответа, ни типа обновления
+        inline_query, поэтому реализовать метод на стороне MAX невозможно.
+        Заглушка нужна, чтобы перенесённый с telebot код падал с понятным
+        объяснением, а не с AttributeError.
+
+        Альтернативы в MAX: inline-клавиатуры (InlineKeyboardMarkup) и
+        reply-клавиатуры (ReplyKeyboardMarkup) на сообщениях бота.
+
+        :param inline_query_id: Идентификатор inline-запроса (в MAX не бывает)
+        :type inline_query_id: str
+
+        :param results: Список результатов inline-запроса
+        :type results: List[Any]
+
+        :param cache_time: Параметр telebot, в MAX не применим
+        :type cache_time: Optional[int]
+
+        :param is_personal: Параметр telebot, в MAX не применим
+        :type is_personal: Optional[bool]
+
+        :param next_offset: Параметр telebot, в MAX не применим
+        :type next_offset: Optional[str]
+
+        :param switch_pm_text: Параметр telebot, в MAX не применим
+        :type switch_pm_text: Optional[str]
+
+        :param switch_pm_parameter: Параметр telebot, в MAX не применим
+        :type switch_pm_parameter: Optional[str]
+
+        :param button: Параметр telebot, в MAX не применим
+        :type button: Optional[Any]
+
+        :raises NotImplementedError: всегда — инлайн-режима в MAX Bot API нет
+        """
+        raise NotImplementedError(
+            "Инлайн-режим не поддерживается MAX Bot API: у MAX нет ни метода "
+            "ответа на inline-запрос, ни самого типа обновления inline_query. "
+            "Используйте inline-клавиатуры (InlineKeyboardMarkup) или "
+            "reply-клавиатуры (ReplyKeyboardMarkup)."
+        )
+
+    @staticmethod
+    def _warn_inline_handler_unsupported(handler: Callable):
+        """
+        Пишет в лог предупреждение о регистрации inline-обработчика,
+        который в MAX никогда не будет вызван.
+        """
+        name = getattr(handler, "__name__", repr(handler))
+        logger.warning(
+            "Обработчик %s зарегистрирован, но никогда не будет вызван: "
+            "инлайн-режима в MAX Bot API нет (обновления inline_query "
+            "не существуют)", name
+        )
+
+    def inline_handler(self, func, **kwargs):
+        """
+        Заглушка для совместимости с telebot: сигнатура один в один с
+        telebot.inline_handler, но зарегистрированный обработчик никогда
+        не будет вызван — инлайн-режима (обновления inline_query) в MAX
+        Bot API нет.
+
+        Регистрация намеренно НЕ роняет бота: перенесённый с telebot код
+        с @bot.inline_handler(...) запускается, остальные обработчики
+        работают, а в лог пишется предупреждение. Прямой вызов
+        answer_inline_query, наоборот, бросает NotImplementedError.
+
+        :param func: Функция-фильтр (в MAX не применяется)
+        :type func: Callable
+
+        :param kwargs: Дополнительные фильтры telebot (игнорируются)
+
+        :return: Декоратор, возвращающий функцию без изменений
+        """
+        def decorator(handler):
+            self._warn_inline_handler_unsupported(handler)
+            return handler
+
+        return decorator
+
+    def register_inline_handler(self, callback: Callable, func: Callable, pass_bot: Optional[bool] = False, **kwargs):
+        """
+        Заглушка для совместимости с telebot: сигнатура один в один с
+        telebot.register_inline_handler. Обработчик никогда не будет
+        вызван — инлайн-режима в MAX Bot API нет; в лог пишется
+        предупреждение. См. inline_handler.
+
+        :param callback: Функция-обработчик (в MAX не будет вызвана)
+        :type callback: Callable
+
+        :param func: Функция-фильтр (в MAX не применяется)
+        :type func: Callable
+
+        :param pass_bot: Параметр telebot, в MAX не применим
+        :type pass_bot: Optional[bool]
+
+        :param kwargs: Дополнительные фильтры telebot (игнорируются)
+        """
+        self._warn_inline_handler_unsupported(callback)
+
+    def chosen_inline_handler(self, func, **kwargs):
+        """
+        Заглушка для совместимости с telebot: сигнатура один в один с
+        telebot.chosen_inline_handler. Обработчик никогда не будет
+        вызван — инлайн-режима (обновления chosen_inline_result) в MAX
+        Bot API нет; в лог пишется предупреждение. См. inline_handler.
+
+        :param func: Функция-фильтр (в MAX не применяется)
+        :type func: Callable
+
+        :param kwargs: Дополнительные фильтры telebot (игнорируются)
+
+        :return: Декоратор, возвращающий функцию без изменений
+        """
+        def decorator(handler):
+            self._warn_inline_handler_unsupported(handler)
+            return handler
+
+        return decorator
+
+    def register_chosen_inline_handler(self, callback: Callable, func: Callable, pass_bot: Optional[bool] = False, **kwargs):
+        """
+        Заглушка для совместимости с telebot: сигнатура один в один с
+        telebot.register_chosen_inline_handler. Обработчик никогда не
+        будет вызван — инлайн-режима в MAX Bot API нет; в лог пишется
+        предупреждение. См. inline_handler.
+
+        :param callback: Функция-обработчик (в MAX не будет вызвана)
+        :type callback: Callable
+
+        :param func: Функция-фильтр (в MAX не применяется)
+        :type func: Callable
+
+        :param pass_bot: Параметр telebot, в MAX не применим
+        :type pass_bot: Optional[bool]
+
+        :param kwargs: Дополнительные фильтры telebot (игнорируются)
+        """
+        self._warn_inline_handler_unsupported(callback)
