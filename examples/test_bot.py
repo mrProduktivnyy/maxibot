@@ -1,0 +1,221 @@
+"""
+Тестовый бот для проверки функциональности maxibot.
+
+Запуск:
+    export MAX_BOT_TOKEN="ваш_токен"
+    python examples/test_bot.py
+
+Команды для проверки в чате с ботом:
+    /start          — приветствие, проверка send_message
+    /info           — информация о боте, проверка get_me
+    /photo          — отправка фото по URL, проверка send_photo
+    /document       — отправка документа, проверка send_document
+    /keyboard       — inline-клавиатура, проверка InlineKeyboardMarkup
+    /edit           — редактирование сообщения, проверка edit_message_text
+    /delete         — удаление сообщения, проверка delete_message
+    /steps          — многошаговый диалог, проверка register_next_step_handler
+    /exception      — намеренный вызов ошибки, проверка MaxApiException
+    любой текст     — эхо, проверка content_types и func-фильтра
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from maxibot import MaxiBot
+from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from maxibot.exceptions import MaxApiException
+
+TOKEN = os.getenv("MAX_BOT_TOKEN")
+if not TOKEN:
+    print("Ошибка: переменная окружения MAX_BOT_TOKEN не задана")
+    sys.exit(1)
+
+bot = MaxiBot(TOKEN)
+
+
+# ---------------------------------------------------------------------------
+# /start
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["start"])
+def cmd_start(message):
+    bot.send_message(
+        message.chat.id,
+        f"Привет, {message.from_user.first_name}!\n\n"
+        "Доступные команды:\n"
+        "/start — это сообщение\n"
+        "/info — информация о боте\n"
+        "/photo — тест send\\_photo\n"
+        "/document — тест send\\_document\n"
+        "/keyboard — тест inline-клавиатуры\n"
+        "/edit — тест edit\\_message\\_text\n"
+        "/delete — тест delete\\_message\n"
+        "/steps — тест register\\_next\\_step\\_handler\n"
+        "/exception — тест обработки исключений"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /info — get_me
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["info"])
+def cmd_info(message):
+    me = bot.get_me()
+    bot.send_message(
+        message.chat.id,
+        f"Имя бота: {me.get('name')}\n"
+        f"username: {me.get('username')}\n"
+        f"user\\_id: {me.get('user_id')}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /photo — send_photo
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["photo"])
+def cmd_photo(message):
+    with open(os.path.join(os.path.dirname(__file__), "../maxibot/docs/tg_to_max.png"), "rb") as f:
+        photo_bytes = f.read()
+    bot.send_photo(
+        chat_id=message.chat.id,
+        photo=photo_bytes,
+        caption="Тест send\\_photo"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /document — send_document
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["document"])
+def cmd_document(message):
+    content = b"Hello from maxibot test!\nThis is a test document."
+    bot.send_document(
+        chat_id=message.chat.id,
+        document=content,
+        caption="Тест send\\_document",
+        visible_file_name="test.txt"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /keyboard — InlineKeyboardMarkup + answer_callback_query
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["keyboard"])
+def cmd_keyboard(message):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("Кнопка 1", callback_data="btn_1"),
+        InlineKeyboardButton("Кнопка 2", callback_data="btn_2"),
+        InlineKeyboardButton("Ссылка", url="https://max.ru"),
+    )
+    bot.send_message(
+        message.chat.id,
+        "Тест inline-клавиатуры. Нажми любую кнопку:",
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda cb: cb.data in ("btn_1", "btn_2"))
+def handle_button(callback):
+    success = bot.answer_callback_query(
+        callback.id,
+        text=f"Ты нажал {callback.data}"
+    )
+    bot.send_message(
+        callback.message.chat.id,
+        f"Получен callback: `{callback.data}`\n"
+        f"answer\\_callback\\_query вернул: `{success}`"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /edit — edit_message_text
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["edit"])
+def cmd_edit(message):
+    sent = bot.send_message(message.chat.id, "Оригинальный текст...")
+    if sent and sent.message_id:
+        bot.edit_message_text(
+            text="Текст успешно отредактирован!",
+            chat_id=message.chat.id,
+            message_id=sent.message_id
+        )
+
+
+# ---------------------------------------------------------------------------
+# /delete — delete_message
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["delete"])
+def cmd_delete(message):
+    sent = bot.send_message(message.chat.id, "Это сообщение сейчас удалится...")
+    if sent and sent.message_id:
+        bot.delete_message(
+            chat_id=message.chat.id,
+            message_id=sent.message_id
+        )
+        bot.send_message(message.chat.id, "Сообщение удалено")
+
+
+# ---------------------------------------------------------------------------
+# /steps — register_next_step_handler
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["steps"])
+def cmd_steps(message):
+    bot.send_message(message.chat.id, "Шаг 1: как тебя зовут?")
+    bot.register_next_step_handler(message, step_name)
+
+
+def step_name(message):
+    name = message.text
+    bot.send_message(message.chat.id, f"Шаг 2: сколько тебе лет, {name}?")
+    bot.register_next_step_handler(message, step_age, name=name)
+
+
+def step_age(message, name):
+    bot.send_message(
+        message.chat.id,
+        f"Готово! {name}, {message.text} лет. Диалог завершён."
+    )
+
+
+# ---------------------------------------------------------------------------
+# /exception — проверка MaxApiException
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["exception"])
+def cmd_exception(message):
+    try:
+        bot.api.send_message(chat_id="невалидный_id", text="test")
+    except MaxApiException as e:
+        bot.send_message(
+            message.chat.id,
+            f"Исключение поймано:\n`{type(e).__name__}: {e}`"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Эхо — любой текст
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(func=lambda m: True)
+def echo(message):
+    if message.text:
+        bot.send_message(message.chat.id, f"Эхо: {message.text}")
+
+
+# ---------------------------------------------------------------------------
+# Запуск
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    print("Бот запущен в режиме polling...")
+    bot.polling()

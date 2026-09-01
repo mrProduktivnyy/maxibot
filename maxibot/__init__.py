@@ -811,3 +811,41 @@ class MaxiBot:
                 break
         else:
             print("No matching handler found for callback")
+
+    def answer_callback_query(
+        self,
+        callback_query_id: str,
+        text: Optional[str] = None,
+        show_alert: Optional[bool] = None,
+        url: Optional[str] = None,
+        cache_time: Optional[int] = None
+    ) -> bool:
+        """
+        Отвечает на callback-запрос от нажатия inline-кнопки.
+
+        :param callback_query_id: Уникальный идентификатор callback-запроса
+        :type callback_query_id: str
+
+        :param text: Текст всплывающего уведомления для пользователя (до 200 символов)
+        :type text: Optional[str]
+
+        :param show_alert: В Telegram показывает alert вместо уведомления.
+                           В MAX API не поддерживается, параметр принимается для совместимости
+        :type show_alert: Optional[bool]
+
+        :param url: В Telegram открывает URL. В MAX API не поддерживается,
+                    параметр принимается для совместимости
+        :type url: Optional[str]
+
+        :param cache_time: В Telegram задаёт время кэша. В MAX API не поддерживается,
+                           параметр принимается для совместимости
+        :type cache_time: Optional[int]
+
+        :return: True если запрос выполнен успешно
+        :rtype: bool
+        """
+        response = self.api.answer_callback(
+            callback_id=callback_query_id,
+            notification=text
+        )
+        return bool(response.get("success", False))
