@@ -15,7 +15,7 @@ class Client:
     Класс низкоуровневых запросов к API MAX
     """
     # BASE_URL = "https://botapi.max.ru"
-    BASE_URL = "https://platform-api.max.ru"
+    BASE_URL = "https://platform-api2.max.ru"
 
     def __init__(self, token: str, proxy: Optional[dict] = {"https": "", "http": ""}):
         """
