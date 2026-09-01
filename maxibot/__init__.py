@@ -11,8 +11,15 @@ from maxibot.apihelper import Api
 from maxibot.types import Message, CallbackQuery, InputMedia
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
-# from maxibot.core.attachments.photo import Photo
+from maxibot.exceptions import (
+    MaxApiException,
+    MaxApiHTTPException,
+    MaxApiInvalidJSONException,
+    MaxApiRequestException,
+    MaxApiNotReadyException,
+)
 from maxibot.core.network.polling import Polling
+from maxibot.core.network.webhook import WebhookServer
 
 
 HandlerFunc = Callable[[Message], None]
@@ -49,8 +56,16 @@ class MaxiBot:
         self.message_handlers = []
         self.callback_query_handlers = []
         self.poll = None
+        self._webhook: WebhookServer = None
         self.is_running = False
-        self.count_retries = 10
+        self.count_retries = 10  # устарело, оставлено для совместимости
+        # Сколько секунд повторять отправку сообщения, пока MAX обрабатывает
+        # загруженное вложение (ошибка attachment.not.ready). Файлы от
+        # нескольких мегабайт обрабатываются заметно дольше 10 секунд.
+        self.send_retry_timeout = 120
+        # Сколько секунд ждать фактической публикации сообщения с файлом в
+        # чате, чтобы следующие отправленные сообщения не появились раньше него.
+        self.publish_wait_timeout = 10
         self._next_steps: Dict[int, StepHandler] = {}
 
     @staticmethod
@@ -69,19 +84,21 @@ class MaxiBot:
 
     def polling(self, allowed_updates: Optional[List[str]] = None):
         """
-        Функция, которая запускает корутину
+        Запускает получение обновлений через long polling.
         """
         asyncio.run(self.start(allowed_updates=allowed_updates))
 
     def stop(self):
         """
-        Метод останавливает поллинг бота
+        Останавливает polling или webhook-сервер бота
         """
         if not self.is_running:
             print("Bot is not running")
             return None
         if self.poll:
             self.poll.stop()
+        if self._webhook:
+            self._webhook.stop()
         self.is_running = False
 
     async def start(self, allowed_updates: Optional[List[str]] = None):
@@ -279,13 +296,222 @@ class MaxiBot:
         )
         self._next_steps[message.from_user.id] = handler
 
+    def clear_step_handler(self, message: Message) -> None:
+        """
+        Сбрасывает обработчик, зарегистрированный через register_next_step_handler().
+
+        Сигнатура один в один с telebot. Используется, когда пользователь ушёл
+        в другой раздел меню, не ответив на ожидаемый вопрос.
+
+        :param message: Сообщение из чата, для которого сбрасывается ожидание
+        :type message: Message
+
+        :return: None
+        """
+        self.clear_step_handler_by_chat_id(message.chat.id)
+
+    def clear_step_handler_by_chat_id(self, chat_id: Union[int, str]) -> None:
+        """
+        Сбрасывает обработчик, зарегистрированный через register_next_step_handler().
+
+        Сигнатура один в один с telebot. В maxibot step-handlers ключуются по
+        ``from_user.id``, который в MAX равен ``chat_id`` диалога (см. класс User) —
+        поэтому chat_id здесь и есть ключ.
+
+        :param chat_id: Чат, для которого сбрасывается ожидание ввода
+        :type chat_id: Union[int, str]
+
+        :return: None
+        """
+        self._next_steps.pop(chat_id, None)
+        # register_next_step_handler мог положить ключ и как int, и как str —
+        # подчищаем оба представления
+        if isinstance(chat_id, str) and chat_id.isdigit():
+            self._next_steps.pop(int(chat_id), None)
+        elif isinstance(chat_id, int):
+            self._next_steps.pop(str(chat_id), None)
+
+    # -------------------------------------------------------------------------
+    # Webhook
+    # -------------------------------------------------------------------------
+
+    def set_webhook(
+        self,
+        url: str,
+        secret: Optional[str] = None,
+        allowed_updates: Optional[List[str]] = None
+    ) -> dict:
+        """
+        Регистрирует webhook в MAX API.
+
+        :param url: Публичный HTTPS-адрес, на который MAX будет слать обновления
+        :param secret: Секрет для проверки заголовка X-Max-Bot-Api-Secret (5–256 символов)
+        :param allowed_updates: Список типов обновлений (None — все)
+        """
+        return self.api.set_webhook(url=url, update_types=allowed_updates, secret=secret)
+
+    def delete_webhook(self, url: str) -> dict:
+        """
+        Удаляет webhook-подписку из MAX API.
+
+        :param url: URL подписки для удаления
+        """
+        return self.api.delete_webhook(url=url)
+
+    def get_webhook_info(self) -> dict:
+        """
+        Возвращает список активных webhook-подписок.
+        """
+        return self.api.get_webhook_info()
+
+    def start_webhook(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 443,
+        secret: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        allowed_updates: Optional[List[str]] = None
+    ):
+        """
+        Запускает локальный HTTP-сервер для приёма обновлений через webhook.
+
+        :param host: Адрес для прослушивания (по умолчанию '0.0.0.0')
+        :param port: Порт для прослушивания (по умолчанию 443, как требует MAX)
+        :param secret: Секрет для валидации заголовка X-Max-Bot-Api-Secret (опционально)
+        :param webhook_url: Если указан — автоматически регистрирует этот URL в MAX API
+                            через POST /subscriptions
+        :param allowed_updates: Список типов обновлений (None — все)
+
+        Пример использования::
+
+            bot.start_webhook(
+                host="0.0.0.0",
+                port=443,
+                secret="my-secret",
+                webhook_url="https://example.com/webhook"
+            )
+        """
+        if self.is_running:
+            print("Bot is already running")
+            return
+
+        if webhook_url:
+            self.set_webhook(url=webhook_url, secret=secret, allowed_updates=allowed_updates)
+
+        self._webhook = WebhookServer(host=host, port=port, secret=secret)
+        self._webhook.start(handler=self._process_update)
+        self.is_running = True
+
+        try:
+            import time
+            while self.is_running:
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            self.stop()
+
+    def _send_attachments(self, chat_id, text, attachments, parse_mode, disable_link_preview=None):
+        """
+        Отправляет сообщение с вложениями, повторяя отправку, пока MAX
+        обрабатывает загруженный файл (ошибка ``attachment.not.ready``).
+
+        Вложение при этом повторно не загружается — используется уже
+        полученный токен. Если API так и не принял сообщение за
+        ``send_retry_timeout`` секунд, выбрасывается ``MaxApiNotReadyException``
+        вместо возврата пустого объекта Message без атрибутов.
+        """
+        deadline = time.monotonic() + self.send_retry_timeout
+        pause = 1
+        while True:
+            try:
+                response = self.api.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    attachments=attachments,
+                    parse_mode=parse_mode,
+                    disable_link_preview=disable_link_preview
+                )
+                break
+            except MaxApiException as exc:
+                if not self._is_attachment_not_ready(exc):
+                    raise
+                if time.monotonic() + pause > deadline:
+                    raise MaxApiNotReadyException(
+                        f"MAX API не принял сообщение за {self.send_retry_timeout} c "
+                        f"(вложение не обработано): {exc}",
+                        function_name=getattr(exc, "function_name", None),
+                        result=getattr(exc, "result", None)
+                    ) from exc
+                time.sleep(pause)
+                pause = min(pause + 1, 5)
+
+        message = Message(update=response, api=self.api)
+        self._wait_message_published(message)
+        return message
+
+    def _wait_message_published(self, message):
+        """
+        Ждёт, пока отправленное сообщение с файлом станет видно в чате.
+
+        MAX публикует сообщение с файловым вложением только после окончания
+        обработки файла, поэтому сообщение, отправленное следом, может
+        появиться в чате раньше него. Ожидание сохраняет порядок отправки.
+        Если сообщение уже опубликовано (обычный случай), проверка занимает
+        один запрос без пауз; по истечении ``publish_wait_timeout`` ожидание
+        прекращается без ошибки.
+        """
+        message_id = getattr(message, "message_id", None)
+        if not message_id:
+            return
+        deadline = time.monotonic() + self.publish_wait_timeout
+        while True:
+            try:
+                info = self.api.get_message(message_id)
+                if isinstance(info, dict) and self._file_attachments_ready(info):
+                    return
+            except MaxApiException:
+                # Сообщение ещё не опубликовано (например, 404) — продолжаем ждать.
+                pass
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(1)
+
+    @staticmethod
+    def _file_attachments_ready(info):
+        """
+        Проверяет, что у файловых вложений сообщения появился url — признак
+        того, что обработка файла закончена и сообщение опубликовано.
+        """
+        body = (info.get("message") or info).get("body") or {}
+        for attachment in body.get("attachments") or []:
+            if attachment.get("type") == "file" and not (attachment.get("payload") or {}).get("url"):
+                return False
+        return True
+
+    @staticmethod
+    def _is_attachment_not_ready(exc):
+        """
+        Определяет, что ошибка API — это ``attachment.not.ready`` (файл ещё
+        обрабатывается на стороне MAX), а не какая-то другая ошибка.
+        """
+        if "attachment.not.ready" in str(exc):
+            return True
+        result = getattr(exc, "result", None)
+        text = getattr(result, "text", "") or ""
+        if "attachment.not.ready" in text:
+            return True
+        result_json = getattr(exc, "result_json", None)
+        if isinstance(result_json, dict) and result_json.get("code") == "attachment.not.ready":
+            return True
+        return False
+
     def send_photo(
         self,
         chat_id: Union[int, str],
         photo: Union[Any, str],
         caption: Optional[str] = None,
         parse_mode: Optional[str] = None,
-        reply_markup: Union[InlineKeyboardMarkup, Any] = None
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_web_page_preview: Optional[bool] = None
     ):
         """
         Отправляет сообщение с фото
@@ -301,6 +527,11 @@ class MaxiBot:
 
         :param parse_mode: Разметка сообщения
         :type parse_mode: Optional[str]
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в подписи (в MAX caption — это text того же POST /messages).
+            В telebot у send_photo параметра нет — расширение для MAX
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
@@ -311,21 +542,15 @@ class MaxiBot:
         final_attachments = []
         if isinstance(photo, InputMedia):
             final_attachments.append(photo.to_dict(api=self.api))
-        final_attachments.append(InputMedia(media=photo).to_dict(api=self.api))
+        else:
+            final_attachments.append(InputMedia(media=photo).to_dict(api=self.api))
         if reply_markup:
             if hasattr(reply_markup, 'to_attachment'):
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return Message(
-            update=self.api.send_message(
-                chat_id=chat_id,
-                text=caption,
-                attachments=final_attachments,
-                parse_mode=parse_mode
-            ),
-            api=self.api
-        )
+        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+                                      disable_link_preview=disable_web_page_preview)
 
     def send_media_group(
         self,
@@ -333,7 +558,8 @@ class MaxiBot:
         media: list,
         caption: Optional[str] = None,
         parse_mode: Optional[str] = None,
-        reply_markup: Union[InlineKeyboardMarkup, Any] = None
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_web_page_preview: Optional[bool] = None
     ):
         """
         Отправляет сообщение с фото
@@ -349,6 +575,11 @@ class MaxiBot:
 
         :param parse_mode: Разметка сообщения
         :type parse_mode: Optional[str]
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в подписи. В telebot у send_media_group параметра нет —
+            расширение для MAX
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
@@ -367,15 +598,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return Message(
-            update=self.api.send_message(
-                chat_id=chat_id,
-                text=caption,
-                attachments=final_attachments,
-                parse_mode=parse_mode
-            ),
-            api=self.api
-        )
+        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+                                      disable_link_preview=disable_web_page_preview)
 
     def send_document(
         self,
@@ -384,7 +608,8 @@ class MaxiBot:
         caption: Optional[str] = None,
         parse_mode: Optional[str] = None,
         reply_markup: Union[InlineKeyboardMarkup, Any] = None,
-        visible_file_name: Optional[str] = None
+        visible_file_name: Optional[str] = None,
+        disable_web_page_preview: Optional[bool] = None
     ):
         """
         Отправляет сообщение с файлом
@@ -400,6 +625,11 @@ class MaxiBot:
 
         :param parse_mode: Разметка сообщения
         :type parse_mode: Optional[str]
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в подписи к файлу. В telebot у send_document параметра
+            нет — расширение для MAX
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
@@ -419,18 +649,11 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        for _ in range(self.count_retries):
-            response = self.api.send_message(
-                chat_id=chat_id,
-                text=caption,
-                attachments=final_attachments,
-                parse_mode=parse_mode.lower()
-            )
-            if isinstance(response, str):
-                time.sleep(1)
-                continue
-            break
-        return Message(update=response, api=self.api)
+        return self._send_attachments(
+            chat_id, caption, final_attachments,
+            parse_mode.lower() if parse_mode else None,
+            disable_link_preview=disable_web_page_preview
+        )
 
     def delete_message(
         self,
@@ -601,7 +824,8 @@ class MaxiBot:
         attachments: Optional[List[Dict[str, Any]]] = None,
         reply_markup: Optional[Any] = None,
         parse_mode: str = "markdown",
-        notify: bool = True
+        notify: bool = True,
+        disable_web_page_preview: Optional[bool] = None
     ) -> Message:
         """
         Отправляет ответ на текущее сообщение/обновление
@@ -614,6 +838,12 @@ class MaxiBot:
 
         :param keyboard: Объект клавиатуры (будет добавлен к attachments)
         :type keyboard:
+
+        :param disable_web_page_preview: Если True, сервер не генерирует превью
+            для ссылок в тексте (имя параметра как в telebot; в MAX API это
+            query-параметр disable_link_preview). None — поведение сервера
+            по умолчанию
+        :type disable_web_page_preview: Optional[bool]
 
         :return: Информация об отправленном сообщении
         :rtype: Message
@@ -638,7 +868,8 @@ class MaxiBot:
                 text=text,
                 attachments=final_attachments,
                 parse_mode=parse_mode.lower(),
-                notify=notify
+                notify=notify,
+                disable_link_preview=disable_web_page_preview
             ),
             api=self.api
         )
@@ -729,3 +960,41 @@ class MaxiBot:
                 break
         else:
             print("No matching handler found for callback")
+
+    def answer_callback_query(
+        self,
+        callback_query_id: str,
+        text: Optional[str] = None,
+        show_alert: Optional[bool] = None,
+        url: Optional[str] = None,
+        cache_time: Optional[int] = None
+    ) -> bool:
+        """
+        Отвечает на callback-запрос от нажатия inline-кнопки.
+
+        :param callback_query_id: Уникальный идентификатор callback-запроса
+        :type callback_query_id: str
+
+        :param text: Текст всплывающего уведомления для пользователя (до 200 символов)
+        :type text: Optional[str]
+
+        :param show_alert: В Telegram показывает alert вместо уведомления.
+                           В MAX API не поддерживается, параметр принимается для совместимости
+        :type show_alert: Optional[bool]
+
+        :param url: В Telegram открывает URL. В MAX API не поддерживается,
+                    параметр принимается для совместимости
+        :type url: Optional[str]
+
+        :param cache_time: В Telegram задаёт время кэша. В MAX API не поддерживается,
+                           параметр принимается для совместимости
+        :type cache_time: Optional[int]
+
+        :return: True если запрос выполнен успешно
+        :rtype: bool
+        """
+        response = self.api.answer_callback(
+            callback_id=callback_query_id,
+            notification=text
+        )
+        return bool(response.get("success", False))

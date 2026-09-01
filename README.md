@@ -21,47 +21,116 @@ tg: [t.me/maxibot_dev](https://t.me/maxibot_dev)
 ```sh
 pip install maxibot
 ```
-## Просто эхо-бот
-Необходимо создать файл `echo_bot.py` и добавить в него следующий код.
-Для начала надо проинициализировать бота, делается это следующим образом:
+## Режимы запуска
+
+Maxibot поддерживает два режима получения обновлений:
+
+| Режим | Когда использовать |
+|---|---|
+| **Long polling** | Разработка и тестирование на локальной машине |
+| **Webhook** | Продакшен: бот работает на сервере с публичным HTTPS-адресом |
+
+---
+
+## Long polling — быстрый старт
+
+Подходит для разработки. Бот сам опрашивает MAX API — публичный адрес не нужен.
+
+Создайте файл `echo_bot.py`:
+
 ```python
 from maxibot import MaxiBot
 
-bot = maxibot.Maxibot("TOKEN")
-```
-После этой декларации нам нужно зарегистрировать так называемых обработчиков сообщений. Обработчики сообщений определяют фильтры, которые должно проходить сообщение. Если сообщение проходит через фильтр, вызывается декорированная функция и входящее сообщение передается в качестве аргумента.
+bot = MaxiBot("TOKEN")
 
-Определите определим обработчик сообщений, который обрабатывает входящие `/start` и `/help` команды.
-```python
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-	bot.send_message(message, "Привет! Как дела?")
-```
-Добавим ещё один обработчик сообщения, который будет повторять отправленный текст:
-```python
+    bot.send_message(message.chat.id, "Привет! Как дела?")
+
 @bot.message_handler(func=lambda m: True)
 def echo_all(message):
-	bot.send_message(message, message.text)
-```
-Для того, чтобы запустить бота, запустим полинг событий следующей командой:
-```python
+    bot.send_message(message.chat.id, message.text)
+
 bot.polling()
 ```
-Для простого эхо-бота это всё. Наш файл теперь выглядит так:
+
+Запустите:
+
+```sh
+python echo_bot.py
+```
+
+Проверьте, отправив боту команды `/start`, `/help` и любой текст.
+
+---
+
+## Webhook — продакшен
+
+MAX API требует публичный HTTPS-адрес на порту 443. На практике бот работает за reverse proxy (nginx, caddy), который принимает HTTPS снаружи и проксирует HTTP внутрь.
+
+### Схема
+
+```
+Пользователь
+    │
+    ▼  HTTPS :443
+[Nginx / Caddy]  ──── завершает TLS, проверяет сертификат
+    │
+    ▼  HTTP :8080
+[Ваш бот]        ──── bot.start_webhook(port=8080, ...)
+```
+
+### Код бота (`bot.py`)
+
 ```python
 from maxibot import MaxiBot
 
-bot = maxibot.Maxibot("TOKEN")
+bot = MaxiBot("TOKEN")
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-	bot.send_message(message, "Привет! Как дела?")
+    bot.send_message(message.chat.id, "Привет! Как дела?")
 
 @bot.message_handler(func=lambda m: True)
 def echo_all(message):
-	bot.send_message(message, message.text)
+    bot.send_message(message.chat.id, message.text)
 
-bot.polling()
+bot.start_webhook(
+    host="0.0.0.0",
+    port=8080,
+    secret="ваш-секрет",           # MAX будет проверять этот секрет в каждом запросе
+    webhook_url="https://example.com/webhook"  # MAX зарегистрирует этот адрес автоматически
+)
 ```
-Чтобы запустить бота, просто откройте терминал и введите `python echo_bot.py`.  
-Проверьте его, отправив команды (`/start` и `/help`) и произвольные текстовые сообщения.
+
+### Пример конфига Nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+
+    location /webhook {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Запуск
+
+```sh
+python bot.py
+```
+
+После старта бот автоматически зарегистрирует webhook-адрес в MAX API через `POST /subscriptions`. MAX начнёт присылать обновления на `https://example.com/webhook`, Nginx перенаправит их на порт 8080, где слушает бот.
+
+Чтобы отписаться от webhook (например, при переключении на polling):
+
+```python
+bot.delete_webhook("https://example.com/webhook")
+```

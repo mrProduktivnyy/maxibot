@@ -63,7 +63,8 @@ class Api:
         method: str = "POST",
         attachments: Optional[List[Dict[str, Any]]] = None,
         parse_mode: str = "markdown",
-        notify: bool = True
+        notify: bool = True,
+        disable_link_preview: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Отправляет/удаляет/обновляет сообщение в чате
@@ -77,6 +78,12 @@ class Api:
         :param attachments: Вложения сообщения
         :type text: Optional[List[Dict[str, Any]]]
 
+        :param disable_link_preview: Если True, сервер не будет генерировать
+            превью для ссылок в тексте сообщения. Query-параметр MAX API,
+            есть только у POST /messages (у PUT/DELETE параметра нет).
+            None — параметр не отправляется, поведение сервера по умолчанию
+        :type disable_link_preview: Optional[bool]
+
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
         """
@@ -85,6 +92,11 @@ class Api:
             params = {"chat_id": chat_id}
         elif msg_id and method in ("DELETE", "PUT"):
             params = {"message_id": msg_id}
+
+        # disable_link_preview — только у POST /messages; requests сериализует
+        # Python bool как "True"/"False", MAX ждёт нижний регистр — шлём строкой
+        if method == "POST" and disable_link_preview is not None:
+            params["disable_link_preview"] = "true" if disable_link_preview else "false"
 
         data = {}
         if text:
@@ -95,7 +107,7 @@ class Api:
         else:
             data["attachments"] = []
 
-        if parse_mode:
+        if text and parse_mode:
             data["format"] = parse_mode
 
         if notify:
@@ -157,6 +169,44 @@ class Api:
         """
         return self.client.request(method="POST", url=url, files=files, content_types=content_types)
 
+    def set_webhook(
+        self,
+        url: str,
+        update_types: Optional[List[str]] = None,
+        secret: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Регистрирует webhook-подписку в MAX API.
+
+        :param url: HTTPS-адрес, на который MAX будет отправлять обновления
+        :param update_types: Список типов обновлений для получения (None — все)
+        :param secret: Секрет для валидации заголовка X-Max-Bot-Api-Secret (5–256 символов)
+        :return: Ответ API
+        """
+        data: Dict[str, Any] = {"url": url}
+        if update_types:
+            data["update_types"] = update_types
+        if secret:
+            data["secret"] = secret
+        return self.client.request("POST", "/subscriptions", data=data)
+
+    def delete_webhook(self, url: str) -> Dict[str, Any]:
+        """
+        Удаляет webhook-подписку.
+
+        :param url: URL подписки для удаления
+        :return: Ответ API
+        """
+        return self.client.request("DELETE", "/subscriptions", params={"url": url})
+
+    def get_webhook_info(self) -> Dict[str, Any]:
+        """
+        Возвращает список активных webhook-подписок.
+
+        :return: Список подписок
+        """
+        return self.client.request("GET", "/subscriptions")
+
     def answer_callback(
             self,
             callback_id: str,
@@ -166,6 +216,7 @@ class Api:
             link: Optional[Dict[str, Any]] = None,
             notify: bool = True,
             format: Optional[str] = None,
+            disable_link_preview: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Метод позволяет отправить уведомление пользователю и/или обновить
@@ -198,6 +249,12 @@ class Api:
 
         :param format: Формат текста сообщения. Доступные значения: "markdown", "html"
         :type format: Optional[str]
+
+        :param disable_link_preview: Если True, сервер не будет генерировать превью
+                                     для ссылок в тексте сообщения (query-параметр,
+                                     добавлен в MAX API в августе 2026).
+                                     None — параметр не отправляется
+        :type disable_link_preview: Optional[bool]
 
         :return: Ответ от MAX API
         :rtype: Dict[str, Any]
@@ -244,6 +301,12 @@ class Api:
         )
         """
         params = {"callback_id": callback_id}
+
+        # disable_link_preview у POST /answers появился в MAX API в августе 2026;
+        # как и у /messages — query-параметр, строкой в нижнем регистре
+        if disable_link_preview is not None:
+            params["disable_link_preview"] = "true" if disable_link_preview else "false"
+
         data: Dict[str, Any] = {}
 
         # Если нужно изменить сообщение (text, attachments, link, format)
