@@ -616,7 +616,11 @@ class MaxiBot:
         :param chat_id: Чат, куда надо отправить сообщение
         :type chat_id: Union[int, str]
 
-        :param photo: Объект фото
+        :param photo: Фото — байты, file-like объект, InputMedia или, как
+            в telebot, строка: прямая http(s)-ссылка на изображение (MAX
+            скачает его сам, без POST /uploads) либо токен ранее
+            загруженного изображения (аналог file_id, лежит в
+            message.photo.payload.token)
         :type photo: Union[Any, str]
 
         :param caption: Текст сообщения под фото
@@ -664,8 +668,10 @@ class MaxiBot:
         :param chat_id: Чат, куда надо отправить сообщение
         :type chat_id: Union[int, str]
 
-        :param photo: Объект фото
-        :type photo: Union[Any, str]
+        :param media: Список фото — байты, file-like объекты, InputMedia
+            или, как в telebot, строки: прямые http(s)-ссылки (MAX скачает
+            их сам) либо токены ранее загруженных изображений
+        :type media: list
 
         :param caption: Текст сообщения под фото
         :type caption: Optional[str]
@@ -714,7 +720,9 @@ class MaxiBot:
         :param chat_id: Чат, куда надо отправить сообщение
         :type chat_id: Union[int, str]
 
-        :param document: Объект файла
+        :param document: Файл — байты или file-like объект. URL-строка не
+            поддерживается (ValueError): MAX принимает URL только для
+            изображений
         :type document: Union[Any, str]
 
         :param caption: Текст сообщения под фото
@@ -734,6 +742,11 @@ class MaxiBot:
 
         if self._check_text_length(text=caption):
             raise ValueError(f'caption должен быть меньше 4000 символов.\nСейчас их {len(caption)}')
+        if isinstance(document, str) and document.startswith(("http://", "https://")):
+            raise ValueError(
+                "MAX принимает URL только для изображений (send_photo). "
+                "Документ можно отправить только байтами или file-like объектом"
+            )
         final_attachments = []
         if isinstance(document, InputMedia) and document.type == "file":
             final_attachments.append(document.to_dict(api=self.api))
@@ -777,7 +790,9 @@ class MaxiBot:
         :param chat_id: Чат, куда надо отправить сообщение
         :type chat_id: Union[int, str]
 
-        :param video: Видео — байты или file-like объект
+        :param video: Видео — байты или file-like объект. URL-строка не
+            поддерживается (ValueError): MAX принимает URL только для
+            изображений
         :type video: Union[Any, str]
 
         :param duration: Принимается для совместимости с telebot и
@@ -813,6 +828,11 @@ class MaxiBot:
 
         if self._check_text_length(text=caption):
             raise ValueError(f'caption должен быть меньше 4000 символов.\nСейчас их {len(caption)}')
+        if isinstance(video, str) and video.startswith(("http://", "https://")):
+            raise ValueError(
+                "MAX принимает URL только для изображений (send_photo). "
+                "Видео можно отправить только байтами или file-like объектом"
+            )
         final_attachments = []
         if isinstance(video, InputMedia) and video.type == "video":
             final_attachments.append(video.to_dict(api=self.api))
