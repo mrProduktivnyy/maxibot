@@ -254,5 +254,5 @@ def echo(message):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("Бот запущен в режиме polling...")
-    bot.polling()
+    print("Бот запущен в режиме infinity polling...")
+    bot.infinity_polling()

@@ -1,5 +1,6 @@
 import asyncio
 # import json
+import logging
 import re
 import time
 import traceback
@@ -23,6 +24,8 @@ from maxibot.core.network.webhook import WebhookServer
 
 
 HandlerFunc = Callable[[Message], None]
+
+logger = logging.getLogger("maxibot")
 
 
 @dataclass
@@ -87,6 +90,100 @@ class MaxiBot:
         Запускает получение обновлений через long polling.
         """
         asyncio.run(self.start(allowed_updates=allowed_updates))
+
+    def _skip_updates(self):
+        """
+        Пропускает обновления, накопленные до запуска бота (skip_pending).
+
+        Крутит GET /updates с timeout=0 (запрос возвращается сразу, без
+        long polling), подтверждая полученное маркером, пока очередь не
+        опустеет — поллинг после этого начнёт с чистого листа.
+        """
+        marker = None
+        while True:
+            params = {"timeout": 0}
+            if marker is not None:
+                params["marker"] = marker
+            data = self.api.get_updates([], params) or {}
+            new_marker = data.get("marker")
+            if not data.get("updates") or new_marker is None or new_marker == marker:
+                break
+            marker = new_marker
+
+    def infinity_polling(
+        self,
+        timeout: Optional[int] = 20,
+        skip_pending: Optional[bool] = False,
+        long_polling_timeout: Optional[int] = 20,
+        logger_level: Optional[int] = logging.ERROR,
+        allowed_updates: Optional[List[str]] = None,
+        restart_on_change: Optional[bool] = False,
+        path_to_watch: Optional[str] = None,
+        *args,
+        **kwargs
+    ):
+        """
+        Запускает polling в бесконечном цикле с обработкой исключений,
+        чтобы бот не останавливался из-за ошибок. Сигнатура один в один
+        с telebot.infinity_polling; выход — через bot.stop() или Ctrl+C
+        (KeyboardInterrupt не перехватывается).
+
+        :param timeout: Принимается для совместимости с telebot и
+            игнорируется — таймаутами соединения управляет клиент MAX
+        :type timeout: Optional[int]
+
+        :param skip_pending: Пропустить обновления, накопленные до запуска
+        :type skip_pending: Optional[bool]
+
+        :param long_polling_timeout: Принимается для совместимости с telebot
+            и игнорируется — длительность long polling задаёт сервер MAX
+            (по умолчанию 30 секунд)
+        :type long_polling_timeout: Optional[int]
+
+        :param logger_level: Уровень логирования ошибок цикла (значения из
+            модуля logging). None/NOTSET — ошибки не логируются
+        :type logger_level: Optional[int]
+
+        :param allowed_updates: Список типов обновлений, которые нужно
+            получать. None — все типы
+        :type allowed_updates: Optional[List[str]]
+
+        :param restart_on_change: Принимается для совместимости с telebot
+            и игнорируется — перезапуск по изменению файлов не поддерживается
+        :type restart_on_change: Optional[bool]
+
+        :param path_to_watch: Принимается для совместимости с telebot
+            и игнорируется
+        :type path_to_watch: Optional[str]
+
+        :return: None
+        """
+        if skip_pending:
+            self._skip_updates()
+
+        if restart_on_change:
+            logger.warning("restart_on_change не поддерживается maxibot и игнорируется")
+
+        while True:
+            try:
+                self.polling(allowed_updates=allowed_updates)
+            except Exception as e:
+                if logger_level and logger_level >= logging.ERROR:
+                    logger.error("Infinity polling exception: %s", str(e))
+                if logger_level and logger_level >= logging.DEBUG:
+                    logger.error("Exception traceback:\n%s", traceback.format_exc())
+                # без сброса флага start() откажется перезапускаться
+                self.is_running = False
+                time.sleep(3)
+                continue
+            if not self.is_running:
+                break
+            # polling завершился сам, но stop() не вызывали — перезапускаем
+            if logger_level and logger_level >= logging.INFO:
+                logger.error("Infinity polling: polling exited")
+            time.sleep(3)
+        if logger_level and logger_level >= logging.INFO:
+            logger.error("Break infinity polling")
 
     def stop(self):
         """
