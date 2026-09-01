@@ -10,10 +10,14 @@
     /info           — информация о боте, проверка get_me
     /photo          — отправка фото по URL, проверка send_photo
     /document       — отправка документа, проверка send_document
+    /video          — отправка видео, проверка send_video
+                      (нужен путь к mp4 в переменной MAX_TEST_VIDEO)
     /keyboard       — inline-клавиатура, проверка InlineKeyboardMarkup
+    /replykb        — reply-клавиатура, проверка ReplyKeyboardMarkup
     /edit           — редактирование сообщения, проверка edit_message_text
     /delete         — удаление сообщения, проверка delete_message
     /steps          — многошаговый диалог, проверка register_next_step_handler
+    /reply          — ответ-цитата на команду, проверка reply_to
     /exception      — намеренный вызов ошибки, проверка MaxApiException
     любой текст     — эхо, проверка content_types и func-фильтра
 """
@@ -24,7 +28,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from maxibot import MaxiBot
-from maxibot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from maxibot.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+)
 from maxibot.exceptions import MaxApiException
 
 TOKEN = os.getenv("MAX_BOT_TOKEN")
@@ -49,10 +58,13 @@ def cmd_start(message):
         "/info — информация о боте\n"
         "/photo — тест send\\_photo\n"
         "/document — тест send\\_document\n"
+        "/video — тест send\\_video\n"
         "/keyboard — тест inline-клавиатуры\n"
+        "/replykb — тест reply-клавиатуры\n"
         "/edit — тест edit\\_message\\_text\n"
         "/delete — тест delete\\_message\n"
         "/steps — тест register\\_next\\_step\\_handler\n"
+        "/reply — тест reply\\_to\n"
         "/exception — тест обработки исключений"
     )
 
@@ -103,6 +115,29 @@ def cmd_document(message):
 
 
 # ---------------------------------------------------------------------------
+# /video — send_video
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["video"])
+def cmd_video(message):
+    video_path = os.getenv("MAX_TEST_VIDEO")
+    if not video_path or not os.path.exists(video_path):
+        bot.send_message(
+            message.chat.id,
+            "Для теста задай путь к mp4-файлу:\n"
+            "`export MAX_TEST_VIDEO=/путь/к/видео.mp4`"
+        )
+        return
+    with open(video_path, "rb") as f:
+        video_bytes = f.read()
+    bot.send_video(
+        chat_id=message.chat.id,
+        video=video_bytes,
+        caption="Тест send\\_video"
+    )
+
+
+# ---------------------------------------------------------------------------
 # /keyboard — InlineKeyboardMarkup + answer_callback_query
 # ---------------------------------------------------------------------------
 
@@ -131,6 +166,24 @@ def handle_button(callback):
         callback.message.chat.id,
         f"Получен callback: `{callback.data}`\n"
         f"answer\\_callback\\_query вернул: `{success}`"
+    )
+
+
+# ---------------------------------------------------------------------------
+# /replykb — ReplyKeyboardMarkup + KeyboardButton
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["replykb"])
+def cmd_replykb(message):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add("Да", "Нет")
+    markup.row(KeyboardButton("Контакт", request_contact=True),
+               KeyboardButton("Гео", request_location=True))
+    bot.send_message(
+        message.chat.id,
+        "Тест reply-клавиатуры. «Да»/«Нет» отправят текст в чат, "
+        "остальные запросят контакт и гео:",
+        reply_markup=markup
     )
 
 
@@ -188,6 +241,15 @@ def step_age(message, name):
 
 
 # ---------------------------------------------------------------------------
+# /reply — reply_to
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["reply"])
+def cmd_reply(message):
+    bot.reply_to(message, "Это ответ-цитата на твоё сообщение (reply\\_to)")
+
+
+# ---------------------------------------------------------------------------
 # /exception — проверка MaxApiException
 # ---------------------------------------------------------------------------
 
@@ -217,5 +279,5 @@ def echo(message):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("Бот запущен в режиме polling...")
-    bot.polling()
+    print("Бот запущен в режиме infinity polling...")
+    bot.infinity_polling()

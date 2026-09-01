@@ -64,6 +64,9 @@ class Polling:
 
             except Exception:
                 print(f"Some error in get updates {traceback.format_exc()}")
+                # пауза, чтобы при недоступности сети не крутиться в горячем
+                # цикле с мгновенными повторами запроса
+                await asyncio.sleep(3)
 
     async def _get_updates(self) -> Dict[str, Any]:
         """
