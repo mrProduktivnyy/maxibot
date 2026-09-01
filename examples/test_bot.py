@@ -14,6 +14,7 @@
     /edit           — редактирование сообщения, проверка edit_message_text
     /delete         — удаление сообщения, проверка delete_message
     /steps          — многошаговый диалог, проверка register_next_step_handler
+    /reply          — ответ-цитата на команду, проверка reply_to
     /exception      — намеренный вызов ошибки, проверка MaxApiException
     любой текст     — эхо, проверка content_types и func-фильтра
 """
@@ -53,6 +54,7 @@ def cmd_start(message):
         "/edit — тест edit\\_message\\_text\n"
         "/delete — тест delete\\_message\n"
         "/steps — тест register\\_next\\_step\\_handler\n"
+        "/reply — тест reply\\_to\n"
         "/exception — тест обработки исключений"
     )
 
@@ -185,6 +187,15 @@ def step_age(message, name):
         message.chat.id,
         f"Готово! {name}, {message.text} лет. Диалог завершён."
     )
+
+
+# ---------------------------------------------------------------------------
+# /reply — reply_to
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["reply"])
+def cmd_reply(message):
+    bot.reply_to(message, "Это ответ-цитата на твоё сообщение (reply\\_to)")
 
 
 # ---------------------------------------------------------------------------

@@ -64,7 +64,8 @@ class Api:
         attachments: Optional[List[Dict[str, Any]]] = None,
         parse_mode: str = "markdown",
         notify: bool = True,
-        disable_link_preview: Optional[bool] = None
+        disable_link_preview: Optional[bool] = None,
+        link: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Отправляет/удаляет/обновляет сообщение в чате
@@ -83,6 +84,11 @@ class Api:
             есть только у POST /messages (у PUT/DELETE параметра нет).
             None — параметр не отправляется, поведение сервера по умолчанию
         :type disable_link_preview: Optional[bool]
+
+        :param link: Ссылка на другое сообщение — словарь вида
+            {"type": "reply"|"forward", "mid": "<id сообщения>"}.
+            None — обычное сообщение без ссылки
+        :type link: Optional[Dict[str, Any]]
 
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
@@ -112,6 +118,9 @@ class Api:
 
         if notify:
             data["notify"] = notify
+
+        if link:
+            data["link"] = link
 
         return self.client.request(method, "/messages", params=params, data=data)
 

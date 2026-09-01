@@ -825,7 +825,8 @@ class MaxiBot:
         reply_markup: Optional[Any] = None,
         parse_mode: str = "markdown",
         notify: bool = True,
-        disable_web_page_preview: Optional[bool] = None
+        disable_web_page_preview: Optional[bool] = None,
+        reply_to_message_id: Optional[str] = None
     ) -> Message:
         """
         Отправляет ответ на текущее сообщение/обновление
@@ -845,6 +846,11 @@ class MaxiBot:
             по умолчанию
         :type disable_web_page_preview: Optional[bool]
 
+        :param reply_to_message_id: Идентификатор сообщения, на которое нужно
+            ответить (имя параметра как в telebot; в MAX API это поле
+            link={"type": "reply", "mid": ...} в теле запроса)
+        :type reply_to_message_id: Optional[str]
+
         :return: Информация об отправленном сообщении
         :rtype: Message
         """
@@ -862,6 +868,10 @@ class MaxiBot:
             else:
                 final_attachments.append(reply_markup)
 
+        link = None
+        if reply_to_message_id:
+            link = {"type": "reply", "mid": reply_to_message_id}
+
         return Message(
             update=self.api.send_message(
                 chat_id=chat_id,
@@ -869,10 +879,30 @@ class MaxiBot:
                 attachments=final_attachments,
                 parse_mode=parse_mode.lower(),
                 notify=notify,
-                disable_link_preview=disable_web_page_preview
+                disable_link_preview=disable_web_page_preview,
+                link=link
             ),
             api=self.api
         )
+
+    def reply_to(self, message: Message, text: str, **kwargs) -> Message:
+        """
+        Отвечает на сообщение `message` (цитата-реплай). Удобная обёртка,
+        как в telebot: send_message(message.chat.id, text,
+        reply_to_message_id=message.message_id, **kwargs)
+
+        :param message: Сообщение, на которое нужно ответить
+        :type message: Message
+
+        :param text: Текст ответа
+        :type text: str
+
+        :param kwargs: Дополнительные параметры, передаются в send_message
+
+        :return: Информация об отправленном сообщении
+        :rtype: Message
+        """
+        return self.send_message(message.chat.id, text, reply_to_message_id=message.message_id, **kwargs)
 
     def get_message(self, message_id: str):
         """
