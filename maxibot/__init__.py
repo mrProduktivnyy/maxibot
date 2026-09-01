@@ -296,6 +296,41 @@ class MaxiBot:
         )
         self._next_steps[message.from_user.id] = handler
 
+    def clear_step_handler(self, message: Message) -> None:
+        """
+        Сбрасывает обработчик, зарегистрированный через register_next_step_handler().
+
+        Сигнатура один в один с telebot. Используется, когда пользователь ушёл
+        в другой раздел меню, не ответив на ожидаемый вопрос.
+
+        :param message: Сообщение из чата, для которого сбрасывается ожидание
+        :type message: Message
+
+        :return: None
+        """
+        self.clear_step_handler_by_chat_id(message.chat.id)
+
+    def clear_step_handler_by_chat_id(self, chat_id: Union[int, str]) -> None:
+        """
+        Сбрасывает обработчик, зарегистрированный через register_next_step_handler().
+
+        Сигнатура один в один с telebot. В maxibot step-handlers ключуются по
+        ``from_user.id``, который в MAX равен ``chat_id`` диалога (см. класс User) —
+        поэтому chat_id здесь и есть ключ.
+
+        :param chat_id: Чат, для которого сбрасывается ожидание ввода
+        :type chat_id: Union[int, str]
+
+        :return: None
+        """
+        self._next_steps.pop(chat_id, None)
+        # register_next_step_handler мог положить ключ и как int, и как str —
+        # подчищаем оба представления
+        if isinstance(chat_id, str) and chat_id.isdigit():
+            self._next_steps.pop(int(chat_id), None)
+        elif isinstance(chat_id, int):
+            self._next_steps.pop(str(chat_id), None)
+
     # -------------------------------------------------------------------------
     # Webhook
     # -------------------------------------------------------------------------
