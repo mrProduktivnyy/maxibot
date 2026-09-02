@@ -76,12 +76,32 @@ class MaxiBot:
     """
     Главный класс бота
     """
-    def __init__(self, token: str, threaded: bool = True, num_threads: int = 2):
+    def __init__(
+        self,
+        token: str,
+        parse_mode: Optional[str] = None,
+        threaded: bool = True,
+        skip_pending: bool = False,
+        num_threads: int = 2
+    ):
         """
         Метод инициализации бота
 
         :param token: Токен бота
         :type token: str
+
+        :param parse_mode: Разметка на весь уровень бота: используется всеми
+            методами отправки и редактирования, если parse_mode не задан в
+            самом вызове (как в telebot). None — прежнее поведение каждого
+            метода: send_message, edit_message_media и edit_message_reply_markup
+            размечают текст как markdown, а подписи к вложениям и
+            edit_message_text уходят без разметки
+        :type parse_mode: Optional[str]
+
+        :param skip_pending: Пропустить обновления, накопленные до запуска
+            бота. Как в telebot, пропуск выполняется один раз — при старте
+            поллинга
+        :type skip_pending: bool
 
         :param threaded: Как в telebot: если True (по умолчанию),
             обработчики выполняются в пуле потоков и медленный обработчик
@@ -93,7 +113,20 @@ class MaxiBot:
             (используется при threaded=True). По умолчанию 2, как в telebot
         :type num_threads: int
         """
+        if parse_mode is not None and not isinstance(parse_mode, str):
+            # второй позиционный параметр раньше был threaded: без этой проверки
+            # MaxiBot(token, False) молча снял бы разметку со всех сообщений,
+            # а MaxiBot(token, True) отправил бы в MAX невалидный format: true
+            raise TypeError(
+                "parse_mode должен быть строкой ('markdown' или 'html'), получено "
+                f"{type(parse_mode).__name__}. Порядок параметров — как в telebot: "
+                "MaxiBot(token, parse_mode, threaded, skip_pending, num_threads), "
+                "поэтому threaded и num_threads передавайте по имени: "
+                "MaxiBot(token, threaded=False, num_threads=4)"
+            )
         self.api = Api(token=token)
+        self.parse_mode = parse_mode
+        self.skip_pending = skip_pending
         self.threaded = threaded
         self.num_threads = num_threads
         if threaded:
@@ -261,6 +294,11 @@ class MaxiBot:
         if self.is_running:
             print("Bot is already running")
             return None
+        if self.skip_pending:
+            # как в telebot: пропуск накопленных обновлений выполняется один
+            # раз, чтобы перезапуск поллинга не терял свежие сообщения
+            self._skip_updates()
+            self.skip_pending = False
         self.is_running = True
         self.poll = Polling(api=self.api, allowed_updates=allowed_updates)
         await self.poll.loop(self._process_update)
@@ -442,6 +480,22 @@ class MaxiBot:
             task(*args, **kwargs)
         except Exception:
             print(f"Error while processing update: {traceback.format_exc()}")
+
+    def _resolve_parse_mode(self, parse_mode, default=None):
+        """
+        Определяет разметку сообщения. Как в telebot: parse_mode из вызова
+        важнее общей разметки бота (``MaxiBot(token, parse_mode=...)``), а
+        если не задан ни там, ни там — остаётся ``default``, прежнее
+        поведение конкретного метода. Пустая строка отключает разметку.
+
+        :param parse_mode: Разметка, переданная в вызов метода
+        :param default: Разметка метода по умолчанию
+
+        :return: Разметка в нижнем регистре (MAX ждёт markdown/html)
+        """
+        if parse_mode is None:
+            parse_mode = self.parse_mode if self.parse_mode is not None else default
+        return parse_mode.lower() if isinstance(parse_mode, str) else parse_mode
 
     def _check_text_length(self, text):
         """
@@ -705,7 +759,9 @@ class MaxiBot:
         :param caption: Текст сообщения под фото
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -729,7 +785,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+        return self._send_attachments(chat_id, caption, final_attachments,
+                                      self._resolve_parse_mode(parse_mode),
                                       disable_link_preview=disable_web_page_preview)
 
     def send_media_group(
@@ -755,7 +812,9 @@ class MaxiBot:
         :param caption: Текст сообщения под фото
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -780,7 +839,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+        return self._send_attachments(chat_id, caption, final_attachments,
+                                      self._resolve_parse_mode(parse_mode),
                                       disable_link_preview=disable_web_page_preview)
 
     def send_document(
@@ -807,7 +867,9 @@ class MaxiBot:
         :param caption: Текст сообщения под фото
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -840,7 +902,7 @@ class MaxiBot:
                 final_attachments.append(reply_markup)
         return self._send_attachments(
             chat_id, caption, final_attachments,
-            parse_mode.lower() if parse_mode else None,
+            self._resolve_parse_mode(parse_mode),
             disable_link_preview=disable_web_page_preview
         )
 
@@ -893,7 +955,9 @@ class MaxiBot:
         :param caption: Текст сообщения под видео
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -924,7 +988,7 @@ class MaxiBot:
                 final_attachments.append(reply_markup)
         return self._send_attachments(
             chat_id, caption, final_attachments,
-            parse_mode.lower() if parse_mode else None,
+            self._resolve_parse_mode(parse_mode),
             disable_link_preview=disable_web_page_preview
         )
 
@@ -965,6 +1029,11 @@ class MaxiBot:
         :param message_id: Айди сообщения
         :type message_id: int
 
+        :param parse_mode: Разметка сообщения (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, текст уходит без разметки
+        :type parse_mode: Optional[str]
+
         :return: Информация об отправленном сообщении
         :rtype: Message | {} (не успех)
         """
@@ -981,7 +1050,7 @@ class MaxiBot:
             text=text,
             method="PUT",
             attachments=final_attachments,
-            parse_mode=parse_mode
+            parse_mode=self._resolve_parse_mode(parse_mode)
         )
 
         if isinstance(response, dict) and response.get("success"):
@@ -997,7 +1066,7 @@ class MaxiBot:
         chat_id: Union[str, int],
         message_id: str,
         reply_markup: Union[InlineKeyboardMarkup, Any] = None,
-        parse_mode: Union[str, Any] = "markdown"
+        parse_mode: Union[str, Any] = None
     ):
         """
         Метод изменения медиа сообщения `message_id` в чате `chat_id`
@@ -1010,6 +1079,12 @@ class MaxiBot:
 
         :param message_id: Айди сообщения
         :type message_id: int
+
+        :param parse_mode: Разметка подписи (markdown/html). Разметка самого
+            media (InputMedia(parse_mode=...)) важнее. Если не задана, берётся
+            общая разметка бота — MaxiBot(token, parse_mode=...); если и там
+            пусто, подпись размечается как markdown, как и раньше
+        :type parse_mode: Optional[str]
 
         :return: Информация об отправленном сообщении
         :rtype: Message | {} (не успех)
@@ -1027,7 +1102,10 @@ class MaxiBot:
             else:
                 final_attachments.append(reply_markup)
         text = get_text(media=media)
-        parse_mode = get_parse_mode(media=media, parse_mode=parse_mode)
+        parse_mode = get_parse_mode(
+            media=media,
+            parse_mode=self._resolve_parse_mode(parse_mode, default="markdown")
+        )
 
         response = self.api.send_message(
             msg_id=message_id,
@@ -1049,7 +1127,7 @@ class MaxiBot:
         chat_id: Union[str, int],
         message_id: str,
         reply_markup: Union[InlineKeyboardMarkup, Any] = None,
-        parse_mode: Union[str, Any] = "markdown"
+        parse_mode: Union[str, Any] = None
     ):
         """
         Метод изменения клавиатуры сообщения `message_id` в чате `chat_id`
@@ -1080,7 +1158,7 @@ class MaxiBot:
             msg_id=message_id,
             method="PUT",
             attachments=final_attachments,
-            parse_mode=parse_mode
+            parse_mode=self._resolve_parse_mode(parse_mode, default="markdown")
         )
 
         if isinstance(response, dict) and response.get("success"):
@@ -1096,7 +1174,7 @@ class MaxiBot:
         text: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
         reply_markup: Optional[Any] = None,
-        parse_mode: str = "markdown",
+        parse_mode: Optional[str] = None,
         notify: bool = True,
         disable_web_page_preview: Optional[bool] = None,
         reply_to_message_id: Optional[str] = None
@@ -1112,6 +1190,12 @@ class MaxiBot:
 
         :param keyboard: Объект клавиатуры (будет добавлен к attachments)
         :type keyboard:
+
+        :param parse_mode: Разметка сообщения (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, текст размечается как markdown, как и раньше.
+            Пустая строка отключает разметку
+        :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
             для ссылок в тексте (имя параметра как в telebot; в MAX API это
@@ -1150,7 +1234,7 @@ class MaxiBot:
                 chat_id=chat_id,
                 text=text,
                 attachments=final_attachments,
-                parse_mode=parse_mode.lower(),
+                parse_mode=self._resolve_parse_mode(parse_mode, default="markdown"),
                 notify=notify,
                 disable_link_preview=disable_web_page_preview,
                 link=link

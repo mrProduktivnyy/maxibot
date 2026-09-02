@@ -44,7 +44,7 @@ def make_api():
 
 
 def make_bot():
-    bot = MaxiBot.__new__(MaxiBot)
+    bot = MaxiBot("t")  # конструктор сеть не трогает
     bot.api = make_api()
     return bot
 

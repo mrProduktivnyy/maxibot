@@ -86,7 +86,7 @@ assert call["params"].get("disable_link_preview") == "true"
 print('5 ok: answer_callback пробрасывает флаг')
 
 # 6. Bot.send_message: telebot-имя disable_web_page_preview доходит до query
-bot = MaxiBot.__new__(MaxiBot)
+bot = MaxiBot("t")  # конструктор сеть не трогает
 bot.api = make_api()
 bot.send_retry_timeout = 120
 bot.publish_wait_timeout = 0
@@ -122,7 +122,7 @@ class FakeMessage:
 
 
 def make_bot():
-    bot = MaxiBot.__new__(MaxiBot)
+    bot = MaxiBot("t")  # конструктор сеть не трогает
     bot._next_steps = {}
     return bot
 
