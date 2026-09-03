@@ -1,10 +1,14 @@
 # from dataclasses import dataclass
+import logging
 import traceback
 from datetime import datetime
+from urllib.parse import urlsplit
 from typing import List, Dict, Any, Optional
 
 from maxibot.apihelper import Api
 from maxibot.util import is_pil_image, pil_image_to_bytes
+
+logger = logging.getLogger("maxibot")
 
 
 class JsonDeserializable(object):
@@ -43,9 +47,95 @@ class UpdateType:
     MESSAGE_CHAT_CREATED = "message_chat_created"  # в текущей документации MAX такого обновления нет
 
 
+class WebAppInfo:
+    """
+    Мини-приложение для кнопки InlineKeyboardButton(web_app=...).
+    Сигнатура как у telebot.types.WebAppInfo(url).
+
+    В Telegram web_app открывает произвольную страницу по URL. В MAX кнопка
+    open_app открывает мини-приложение бота, а адрес самого приложения
+    задаётся в настройках бота. Поэтому url здесь — публичное имя
+    (username) бота или ссылка на него (https://max.ru/<username>), чьё
+    мини-приложение надо открыть; это поле web_app кнопки open_app.
+
+    Пример, один в один с telebot:
+
+        markup.add(InlineKeyboardButton("Открыть", web_app=WebAppInfo("https://max.ru/mybot")))
+
+    :param url: Публичное имя (username) бота (ведущий @ отбрасывается)
+        или ссылка на него — поле web_app кнопки open_app. None допустим,
+        если задан contact_id. Адрес самого приложения сюда не подходит:
+        для такого url будет предупреждение в лог
+    :type url: Optional[str]
+
+    :param contact_id: ID бота, чьё мини-приложение надо открыть — поле
+        contact_id кнопки open_app (только в MAX)
+    :type contact_id: Optional[int]
+
+    :param payload: Параметр запуска, который попадёт в initData
+        мини-приложения — поле payload кнопки open_app (только в MAX)
+    :type payload: Optional[str]
+    """
+
+    def __init__(
+            self,
+            url: Optional[str],
+            contact_id: Optional[int] = None,
+            payload: Optional[str] = None,
+    ):
+        if isinstance(url, str) and url.startswith("@"):
+            url = url[1:]  # telebot-привычка: @username
+        self.url = url
+        self.contact_id = contact_id
+        self.payload = payload
+
+        if not url and contact_id is None:
+            raise ValueError("нужен url (username или ссылка на бота) или contact_id")
+        if url:
+            parts = urlsplit(url)
+            host = (parts.hostname or "").lower()
+            if parts.scheme in ("http", "https") and \
+                    host != "max.ru" and not host.endswith(".max.ru"):
+                logger.warning(
+                    "WebAppInfo(%r): в MAX кнопка open_app открывает мини-приложение "
+                    "бота, настроенное на dev.max.ru, — url должен быть username бота "
+                    "или https://max.ru/<username>, а не адрес приложения, как в Telegram",
+                    url,
+                )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Поля кнопки open_app для MAX API: web_app, contact_id, payload.
+        Незаданные поля в словарь не попадают
+
+        :return: Словарь с полями кнопки open_app
+        :rtype: Dict[str, Any]
+        """
+        result: Dict[str, Any] = {}
+        if self.url:
+            result["web_app"] = self.url
+        if self.contact_id is not None:
+            result["contact_id"] = self.contact_id
+        if self.payload is not None:
+            result["payload"] = self.payload
+        return result
+
+
 class InlineKeyboardButton:
     """
-    Класс для создания inline-кнопок в сообщениях
+    Класс для создания inline-кнопок в сообщениях. Сигнатура один в один
+    с telebot.InlineKeyboardButton: text, url, callback_data, web_app.
+
+    Кнопка должна быть ровно одного вида:
+
+    * url — {"type": "link"}: открывает ссылку;
+    * callback_data — {"type": "callback"}: по нажатию бот получает
+      message_callback с этими данными (callback_query_handler);
+    * web_app — {"type": "open_app"}: открывает мини-приложение бота,
+      см. WebAppInfo.
+
+    Кнопки link и open_app — специальные: в ряду с ними не больше
+    3 кнопок (у обычных — 7).
 
     :param text: Текст на кнопке
     :type text: str
@@ -55,6 +145,38 @@ class InlineKeyboardButton:
 
     :param callback_data: Данные для callback-кнопки
     :type callback_data: Optional[str]
+
+    :param web_app: Мини-приложение для кнопки типа "open_app": WebAppInfo
+        или строка — username бота или ссылка на него
+    :type web_app: Optional[WebAppInfo]
+
+    Параметры telebot без аналога в MAX (switch_inline_query, callback_game,
+    pay, login_url и т.п.) принимаются и игнорируются, но кнопка только
+    с таким параметром не собирается — ValueError с его именем.
+
+    :param switch_inline_query: Принимается для совместимости с telebot и
+        игнорируется — inline-режима в MAX нет
+    :type switch_inline_query: Optional[Any]
+
+    :param switch_inline_query_current_chat: Принимается для совместимости
+        с telebot и игнорируется
+    :type switch_inline_query_current_chat: Optional[Any]
+
+    :param switch_inline_query_chosen_chat: Принимается для совместимости
+        с telebot и игнорируется
+    :type switch_inline_query_chosen_chat: Optional[Any]
+
+    :param callback_game: Принимается для совместимости с telebot и
+        игнорируется — игр в MAX нет
+    :type callback_game: Optional[Any]
+
+    :param pay: Принимается для совместимости с telebot и игнорируется —
+        платежей в MAX Bot API нет
+    :type pay: Optional[Any]
+
+    :param login_url: Принимается для совместимости с telebot и
+        игнорируется
+    :type login_url: Optional[Any]
     """
     MAX_URL_LEN = 2048
 
@@ -63,15 +185,48 @@ class InlineKeyboardButton:
             text: str,
             url: Optional[str] = None,
             callback_data: Optional[str] = None,
+            web_app: Optional[WebAppInfo] = None,
+            switch_inline_query: Optional[Any] = None,
+            switch_inline_query_current_chat: Optional[Any] = None,
+            switch_inline_query_chosen_chat: Optional[Any] = None,
+            callback_game: Optional[Any] = None,
+            pay: Optional[Any] = None,
+            login_url: Optional[Any] = None,
     ):
+        if isinstance(web_app, str) and web_app:
+            web_app = WebAppInfo(web_app)
+        elif web_app is not None and not isinstance(web_app, WebAppInfo):
+            telebot_url = getattr(web_app, "url", None)  # telebot.types.WebAppInfo
+            if isinstance(telebot_url, str) and telebot_url:
+                web_app = WebAppInfo(telebot_url)
         self.text = text
         self.url = url
         self.callback_data = callback_data
+        self.web_app = web_app
+        self.switch_inline_query = switch_inline_query
+        self.switch_inline_query_current_chat = switch_inline_query_current_chat
+        self.switch_inline_query_chosen_chat = switch_inline_query_chosen_chat
+        self.callback_game = callback_game
+        self.pay = pay
+        self.login_url = login_url
 
-        if not (url or callback_data):
-            raise ValueError("url или callback_data обязан быть")
-        if url and callback_data:
-            raise ValueError("укажите что-то одно")
+        kinds = [name for name, value in (("url", url), ("callback_data", callback_data), ("web_app", web_app)) if value]
+        if not kinds:
+            telebot_only = [name for name, value in (
+                ("switch_inline_query", switch_inline_query),
+                ("switch_inline_query_current_chat", switch_inline_query_current_chat),
+                ("switch_inline_query_chosen_chat", switch_inline_query_chosen_chat),
+                ("callback_game", callback_game),
+                ("pay", pay),
+                ("login_url", login_url),
+            ) if value is not None]
+            if telebot_only:
+                raise ValueError(
+                    f"кнопка только с {', '.join(telebot_only)}: аналога в MAX нет "
+                    f"(inline-режима, игр и платежей нет) — нужен url, callback_data или web_app")
+            raise ValueError("url, callback_data или web_app обязан быть")
+        if len(kinds) > 1:
+            raise ValueError(f"укажите что-то одно: {' и '.join(kinds)}")
         if url and len(url) > self.MAX_URL_LEN:
             raise ValueError(f"url не может быть длиннее {self.MAX_URL_LEN} символов")
 
@@ -84,6 +239,8 @@ class InlineKeyboardButton:
         """
         if self.url:
             return {"type": "link", "text": self.text, "url": self.url}
+        if self.web_app:
+            return {"type": "open_app", "text": self.text, **self.web_app.to_dict()}
         return {
             "type": "callback",
             "text": self.text,
@@ -94,10 +251,10 @@ class InlineKeyboardButton:
         """
         Проверяет, является ли кнопка специальной (ограничивает ряд до 3 кнопок)
 
-        :return: True если кнопка специальная (link), False если обычная (callback)
+        :return: True если кнопка link или open_app, False если обычная (callback)
         :rtype: bool
         """
-        return self.url is not None  # link
+        return bool(self.url or self.web_app)
 
 
 class InlineKeyboardMarkup:
@@ -192,10 +349,9 @@ class InlineKeyboardMarkup:
             special_in_row = any(btn.is_special() for btn in row)
             limit = self.MAX_ROW_SPECIAL if special_in_row else self.MAX_ROW_REGULAR
             if len(row) > limit:
-                raise ValueError(
-                    f"Ряд содержит {len(row)} кнопок, но максимум {limit} "
-                    f"(из-за special-кнопок)" if special_in_row else ""
-                )
+                reason = " (в ряду есть кнопка link, open_app, request_contact или request_geo_location)" \
+                    if special_in_row else ""
+                raise ValueError(f"Ряд содержит {len(row)} кнопок, но максимум {limit}{reason}")
 
 
 class KeyboardButton:
@@ -210,9 +366,12 @@ class KeyboardButton:
     * request_contact=True — {"type": "request_contact"}: запрашивает
       контакт и номер телефона пользователя;
     * request_location=True — {"type": "request_geo_location"}:
-      запрашивает местоположение пользователя.
+      запрашивает местоположение пользователя;
+    * web_app=WebAppInfo(...) — {"type": "open_app"}: открывает
+      мини-приложение бота, как в telebot (см. WebAppInfo).
 
-    Если заданы оба request-флага, приоритет у request_contact.
+    Приоритет, если задано несколько: request_contact, затем
+    request_location, затем web_app.
 
     :param text: Текст кнопки (у обычной кнопки он же отправляется в чат)
     :type text: str
@@ -230,9 +389,11 @@ class KeyboardButton:
         текстовой
     :type request_poll: Optional[Any]
 
-    :param web_app: Принимается для совместимости с telebot и
-        игнорируется — web app на reply-кнопке MAX не поддерживает,
-        кнопка станет обычной текстовой
+    :param web_app: WebAppInfo или строка (username бота или ссылка
+        на него) — кнопка станет кнопкой open_app и откроет
+        мини-приложение бота, как в telebot. Другие значения
+        принимаются для совместимости и игнорируются — кнопка
+        останется обычной текстовой
     :type web_app: Optional[Any]
 
     :param request_user: Принимается для совместимости с telebot и
@@ -259,6 +420,12 @@ class KeyboardButton:
             request_chat: Optional[Any] = None,
             request_users: Optional[Any] = None,
     ):
+        if isinstance(web_app, str) and web_app:
+            web_app = WebAppInfo(web_app)
+        elif web_app is not None and not isinstance(web_app, WebAppInfo):
+            telebot_url = getattr(web_app, "url", None)  # telebot.types.WebAppInfo
+            if isinstance(telebot_url, str) and telebot_url:
+                web_app = WebAppInfo(telebot_url)
         self.text = text
         self.request_contact = request_contact
         self.request_location = request_location
@@ -279,6 +446,8 @@ class KeyboardButton:
             return {"type": "request_contact", "text": self.text}
         if self.request_location:
             return {"type": "request_geo_location", "text": self.text}
+        if isinstance(self.web_app, WebAppInfo):
+            return {"type": "open_app", "text": self.text, **self.web_app.to_dict()}
         return {"type": "message", "text": self.text}
 
     def is_special(self) -> bool:
@@ -286,9 +455,11 @@ class KeyboardButton:
         Проверяет, является ли кнопка специальной (ограничивает ряд до 3 кнопок)
 
         :return: True если кнопка запрашивает контакт или местоположение
+            либо открывает мини-приложение
         :rtype: bool
         """
-        return bool(self.request_contact or self.request_location)
+        return bool(self.request_contact or self.request_location
+                    or isinstance(self.web_app, WebAppInfo))
 
 
 class ReplyKeyboardMarkup(InlineKeyboardMarkup):
