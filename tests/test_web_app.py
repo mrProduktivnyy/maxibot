@@ -283,4 +283,19 @@ assert KeyboardButton("x", web_app=TelebotWebAppInfo("mybot")).to_dict() == \
     {"type": "open_app", "text": "x", "web_app": "mybot"}
 print('12 ok: телеботовский WebAppInfo принимается')
 
+# 13. Сигнатура InlineKeyboardMarkup как в telebot: (keyboard=None, row_width=3)
+params = inspect.signature(InlineKeyboardMarkup.__init__).parameters
+assert list(params) == ["self", "keyboard", "row_width"], list(params)
+assert params["keyboard"].default is None and params["row_width"].default == 3
+markup = InlineKeyboardMarkup()
+markup.add(cb_btn(1), cb_btn(2), cb_btn(3))
+assert [[b["text"] for b in r] for r in markup.to_attachment()["payload"]["buttons"]] == \
+    [["c1", "c2", "c3"]]  # телеботовский дефолт: один ряд из трёх, а не три ряда
+markup = InlineKeyboardMarkup(keyboard=[[cb_btn(1)], [cb_btn(2), cb_btn(3)]])
+assert [[b["text"] for b in r] for r in markup.to_attachment()["payload"]["buttons"]] == \
+    [["c1"], ["c2", "c3"]]
+markup = InlineKeyboardMarkup([[cb_btn(1)]])  # keyboard — первый позиционный, как в telebot
+assert markup.to_attachment()["payload"]["buttons"] == [[cb_btn(1).to_dict()]]
+print('13 ok: InlineKeyboardMarkup(keyboard, row_width=3) как в telebot')
+
 print('ALL OK')

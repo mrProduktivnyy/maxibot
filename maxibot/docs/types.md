@@ -80,8 +80,8 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **photo_id** (`ImagePayload`) - Уникальный ID этого изображения  
 * **token** (`str`) - Токен изображения  
 * **url** (`str`) - URL изображения  
-## class maxibot.types.InlineKeyboardMarkup(row_width)
-Класс для создания inline-клавиатур в сообщениях  
+## class maxibot.types.InlineKeyboardMarkup(keyboard, row_width)
+Класс для создания inline-клавиатур в сообщениях. Сигнатура как у telebot: keyboard — готовый список рядов кнопок, row_width по умолчанию 3  
 **Параметры:**
 * **MAX_ROWS** (`int`) - Максимум рядов в клавиатуре (30)  
 * **MAX_BUTTONS** (`int`) - Максимум кнопок во всей клавиатуре (210)  

@@ -259,9 +259,15 @@ class InlineKeyboardButton:
 
 class InlineKeyboardMarkup:
     """
-    Класс для создания inline-клавиатур в сообщениях
+    Класс для создания inline-клавиатур в сообщениях. Сигнатура один
+    в один с telebot.InlineKeyboardMarkup: (keyboard=None, row_width=3).
 
-    :param row_width: Ширина ряда по умолчанию (сколько кнопок в ряду)
+    :param keyboard: Готовая клавиатура — список рядов кнопок
+        InlineKeyboardButton
+    :type keyboard: Optional[List[List[InlineKeyboardButton]]]
+
+    :param row_width: Ширина ряда по умолчанию для add()
+        (сколько кнопок в ряду), как в telebot — 3
     :type row_width: int
     """
     MAX_ROWS = 30
@@ -269,9 +275,13 @@ class InlineKeyboardMarkup:
     MAX_ROW_REGULAR = 7
     MAX_ROW_SPECIAL = 3
 
-    def __init__(self, row_width: int = 1):
+    def __init__(
+            self,
+            keyboard: Optional[List[List[InlineKeyboardButton]]] = None,
+            row_width: int = 3,
+    ):
         self.row_width = row_width
-        self.keyboard: List[List[InlineKeyboardButton]] = []
+        self.keyboard: List[List[InlineKeyboardButton]] = keyboard if keyboard else []
 
     def add(self, *args: InlineKeyboardButton, row_width=None) -> 'InlineKeyboardMarkup':
         """
