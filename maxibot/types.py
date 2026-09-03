@@ -17,15 +17,29 @@ class JsonDeserializable(object):
 
 class UpdateType:
     """
-    Типы обновлений, которые можно получать от MAX API
+    Типы обновлений, которые можно получать от MAX API (объект Update в
+    документации; тот же список строк — maxibot.util.update_types)
     """
     MESSAGE_CREATED = "message_created"
     MESSAGE_CALLBACK = "message_callback"
-    BOT_STARTED = "bot_started"
     MESSAGE_EDITED = "message_edited"
-    MESSAGE_DELETED = "message_deleted"
-    MESSAGE_CHAT_CREATED = "message_chat_created"
+    MESSAGE_REMOVED = "message_removed"
+    MESSAGE_DELETED = MESSAGE_REMOVED  # прежнее имя: "message_deleted" MAX не присылает
+    BOT_STARTED = "bot_started"
+    BOT_STOPPED = "bot_stopped"
     BOT_ADDED = "bot_added"
+    BOT_REMOVED = "bot_removed"
+    USER_ADDED = "user_added"
+    USER_REMOVED = "user_removed"
+    CHAT_TITLE_CHANGED = "chat_title_changed"
+    DIALOG_CLEARED = "dialog_cleared"
+    DIALOG_MUTED = "dialog_muted"
+    DIALOG_UNMUTED = "dialog_unmuted"
+    DIALOG_REMOVED = "dialog_removed"
+    COMMENT_CREATED = "comment_created"
+    COMMENT_EDITED = "comment_edited"
+    COMMENT_REMOVED = "comment_removed"
+    MESSAGE_CHAT_CREATED = "message_chat_created"  # в текущей документации MAX такого обновления нет
 
 
 class InlineKeyboardButton:

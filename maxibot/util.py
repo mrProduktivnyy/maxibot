@@ -11,6 +11,16 @@ except ImportError:
 
 MAX_MESSAGE_LENGTH = 4000
 
+# Все типы обновлений MAX Bot API (объект Update в документации) — аналог
+# telebot.util.update_types; именно их принимает bot.middleware_handler
+update_types = [
+    "message_created", "message_edited", "message_removed", "message_callback",
+    "bot_added", "bot_removed", "bot_started", "bot_stopped",
+    "user_added", "user_removed", "chat_title_changed",
+    "dialog_cleared", "dialog_muted", "dialog_unmuted", "dialog_removed",
+    "comment_created", "comment_edited", "comment_removed",
+]
+
 
 def is_command(text: str) -> bool:
     """

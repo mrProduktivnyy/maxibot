@@ -96,12 +96,25 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **text** (`str`) - Текст на кнопке  
 * **url** (`str`) - URL ссылка для кнопки типа "link"  
 * **callback_data** (`str`) - Данные для callback-кнопки  
-## class maxibot.types.UpdateType(text, url, callback_data)
-Типы обновлений, которые можно получать от MAX API  
+## class maxibot.types.UpdateType
+Типы обновлений, которые можно получать от MAX API (объект Update в документации; тот же список строк — `maxibot.util.update_types`)  
 **Параметры:**
-* **MESSAGE_CREATED** (`int`) - Новое сообщение созданно  
-* **MESSAGE_CALLBACK** (`int`) - Событие нажатия на кнопку клавиатуры бота  
-* **BOT_STARTED** (`int`) - Бот запущен пользователем  
-* **MESSAGE_EDITED** (`int`) - Сообщение изменено  
-* **MESSAGE_DELETED** (`int`) - Сообщение удалено  
-* **MESSAGE_CHAT_CREATED** (`int`) - Создан новый чат  
+* **MESSAGE_CREATED** (`str`) - Новое сообщение создано  
+* **MESSAGE_CALLBACK** (`str`) - Нажата кнопка клавиатуры бота  
+* **MESSAGE_EDITED** (`str`) - Сообщение изменено  
+* **MESSAGE_REMOVED** (`str`) - Сообщение удалено (`MESSAGE_DELETED` — прежнее имя той же константы)  
+* **BOT_STARTED** (`str`) - Пользователь запустил бота  
+* **BOT_STOPPED** (`str`) - Пользователь остановил бота  
+* **BOT_ADDED** (`str`) - Бот добавлен в чат  
+* **BOT_REMOVED** (`str`) - Бот удалён из чата  
+* **USER_ADDED** (`str`) - Пользователь добавлен в чат  
+* **USER_REMOVED** (`str`) - Пользователь удалён из чата  
+* **CHAT_TITLE_CHANGED** (`str`) - Изменено название чата  
+* **DIALOG_CLEARED** (`str`) - Пользователь очистил диалог с ботом  
+* **DIALOG_MUTED** (`str`) - Пользователь отключил уведомления диалога с ботом  
+* **DIALOG_UNMUTED** (`str`) - Пользователь включил уведомления диалога с ботом  
+* **DIALOG_REMOVED** (`str`) - Пользователь удалил диалог с ботом  
+* **COMMENT_CREATED** (`str`) - Создан комментарий  
+* **COMMENT_EDITED** (`str`) - Комментарий изменён  
+* **COMMENT_REMOVED** (`str`) - Комментарий удалён  
+* **MESSAGE_CHAT_CREATED** (`str`) - Устаревшее: в текущей документации MAX такого обновления нет  
