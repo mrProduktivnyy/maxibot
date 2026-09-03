@@ -30,52 +30,57 @@
 * **_process_update** (`update`) - Метод для обработки входящего полученного обновления  
     * **update** - Словарь, полученный от API MAX в процессе опроса API на обновления  
 * **_check_text_length** (`text`) - Проверки длины строки `text`  
-* **send_photo** (`chat_id`, `photo`, `caption`, `parse_mode`, `reply_markup`) - Отправляет сообщение с фото  
+* **send_photo** (`chat_id`, `photo`, `caption`, `parse_mode`, `reply_markup`, `disable_web_page_preview`) - Отправляет сообщение с фото  
     * **chat_id** - Чат, куда надо отправить сообщение  
     * **photo** - Объект фото  
     * **caption** - Текст сообщения под фото  
     * **parse_mode** - Формат сообщения  
     * **reply_markup** - Объект клавиатуры  
-* **send_media_group** (`chat_id`, `media`, `caption`, `parse_mode`, `reply_markup`) - Отправляет сообщение с фото  
+    * **disable_web_page_preview** - Отключить предпросмотр ссылок  
+* **send_media_group** (`chat_id`, `media`, `caption`, `parse_mode`, `reply_markup`, `disable_web_page_preview`) - Отправляет сообщение с группой медиафайлов  
     * **chat_id** - Чат, куда надо отправить сообщение  
     * **media** - Список объектов медиа  
     * **caption** - Текст сообщения под фото  
     * **parse_mode** - Формат сообщения  
     * **reply_markup** - Объект клавиатуры  
-* **send_document** (`chat_id`, `document`, `caption`, `parse_mode`, `reply_markup`) - Отправляет сообщение с фото  
+    * **disable_web_page_preview** - Отключить предпросмотр ссылок  
+* **send_document** (`chat_id`, `document`, `caption`, `parse_mode`, `reply_markup`, `visible_file_name`, `disable_web_page_preview`) - Отправляет сообщение с документом  
     * **chat_id** - Чат, куда надо отправить сообщение  
     * **document** - Объект документа  
     * **caption** - Текст сообщения под фото  
     * **parse_mode** - Формат сообщения  
     * **reply_markup** - Объект клавиатуры  
-    * **visible_file_name** - Объект клавиатуры  
-* **send_document** (`chat_id`, `message_id`) - Метод удаления сообщения `message_id` в чате `chat_id`  
-    * **chat_id** - Чат, куда надо отправить сообщение  
-    * **message_id** - Уникальный идентификаторсообщения   
-* **edit_message_text** (`text`, `chat_id`, `message_id`, `parse_mode`, `reply_markup`) - Отправляет сообщение с фото  
+    * **visible_file_name** - Имя файла, которое увидит пользователь  
+    * **disable_web_page_preview** - Отключить предпросмотр ссылок  
+* **delete_message** (`chat_id`, `message_id`) - Удаляет сообщение `message_id` в чате `chat_id`  
+    * **chat_id** - Чат, где надо удалить сообщение  
+    * **message_id** - Уникальный идентификатор сообщения  
+* **edit_message_text** (`text`, `chat_id`, `message_id`, `reply_markup`, `parse_mode`) - Редактирует текст сообщения  
     * **text** - Текст, на который надо заменить текущий  
     * **chat_id** - Чат, где надо изменить сообщение  
     * **message_id** - Идентификатор сообщения, которое надо поменять  
-    * **parse_mode** - Формат сообщения  
     * **reply_markup** - Объект клавиатуры  
-* **edit_message_media** (`media`, `chat_id`, `message_id`, `parse_mode`, `reply_markup`) - Отправляет сообщение с фото  
+    * **parse_mode** - Формат сообщения  
+* **edit_message_media** (`media`, `chat_id`, `message_id`, `reply_markup`, `parse_mode`) - Редактирует сообщение с медиа  
     * **media** - Медиа, на которое надо заменить текущее  
     * **chat_id** - Чат, где надо изменить сообщение  
     * **message_id** - Идентификатор сообщения, которое надо поменять  
-    * **parse_mode** - Формат сообщения  
     * **reply_markup** - Объект клавиатуры  
-* **edit_message_reply_markup** (`chat_id`, `message_id`, `parse_mode`, `reply_markup`) - Отправляет сообщение с фото  
+    * **parse_mode** - Формат сообщения  
+* **edit_message_reply_markup** (`chat_id`, `message_id`, `reply_markup`, `parse_mode`) - Редактирует клавиатуру сообщения  
     * **chat_id** - Чат, где надо изменить сообщение  
     * **message_id** - Идентификатор сообщения, которое надо поменять  
-    * **parse_mode** - Формат сообщения  
     * **reply_markup** - Объект клавиатуры  
-* **send_message** (`chat_id`, `text`, `attachments`, `parse_mode`, `reply_markup`, `notify`) - Отправляет сообщение с фото  
-    * **chat_id** - Чат, где надо изменить сообщение  
+    * **parse_mode** - Формат сообщения  
+* **send_message** (`chat_id`, `text`, `attachments`, `reply_markup`, `parse_mode`, `notify`, `disable_web_page_preview`, `reply_to_message_id`) - Отправляет сообщение  
+    * **chat_id** - Чат, куда надо отправить сообщение  
     * **text** - Текст сообщения  
     * **attachments** - Вложения сообщения  
-    * **parse_mode** - Формат сообщения  
     * **reply_markup** - Объект клавиатуры  
+    * **parse_mode** - Формат сообщения  
     * **notify** - Флаг звукового уведомления отправки сообщения  
+    * **disable_web_page_preview** - Отключить предпросмотр ссылок  
+    * **reply_to_message_id** - Идентификатор сообщения, на которое бот ответит цитатой  
 * **get_message** (`message_id`) - Метод получения сообщения по айди  
     * **message_id** - Идентификатор сообщения, которое надо получить  
 * **callback_query_handler** (`data` `**kwargs`) - Декоратор для регистрации обработчиков callback-запросов от inline-кнопок  

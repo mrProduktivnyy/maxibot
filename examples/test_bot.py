@@ -13,7 +13,8 @@
     /document       — отправка документа, проверка send_document
     /video          — отправка видео, проверка send_video
                       (нужен путь к mp4 в переменной MAX_TEST_VIDEO)
-    /keyboard       — inline-клавиатура, проверка InlineKeyboardMarkup
+    /keyboard       — inline-клавиатура, проверка InlineKeyboardMarkup и
+                      кнопки мини-приложения (WebAppInfo)
     /replykb        — reply-клавиатура, проверка ReplyKeyboardMarkup
     /edit           — редактирование сообщения, проверка edit_message_text
     /delete         — удаление сообщения, проверка delete_message
@@ -33,6 +34,7 @@ from maxibot import MaxiBot, apihelper
 from maxibot.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    WebAppInfo,
     ReplyKeyboardMarkup,
     KeyboardButton,
 )
@@ -170,16 +172,24 @@ def cmd_video(message):
 
 
 # ---------------------------------------------------------------------------
-# /keyboard — InlineKeyboardMarkup + answer_callback_query
+# /keyboard — InlineKeyboardMarkup + WebAppInfo + answer_callback_query
 # ---------------------------------------------------------------------------
 
 @bot.message_handler(commands=["keyboard"])
 def cmd_keyboard(message):
+    # Кнопка open_app открывает мини-приложение бота, если оно настроено
+    # в MAX; как в telebot, web_app=WebAppInfo(...), но url здесь —
+    # ссылка на бота, а не адрес приложения
+    me = bot.get_me()
+    username = me.get("username")
+    web_app = WebAppInfo(f"https://max.ru/{username}") if username \
+        else WebAppInfo(None, contact_id=me["user_id"])
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("Кнопка 1", callback_data="btn_1"),
         InlineKeyboardButton("Кнопка 2", callback_data="btn_2"),
         InlineKeyboardButton("Ссылка", url="https://max.ru"),
+        InlineKeyboardButton("Мини-приложение", web_app=web_app),
     )
     bot.send_message(
         message.chat.id,

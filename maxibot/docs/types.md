@@ -80,22 +80,30 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **photo_id** (`ImagePayload`) - Уникальный ID этого изображения  
 * **token** (`str`) - Токен изображения  
 * **url** (`str`) - URL изображения  
-## class maxibot.types.InlineKeyboardMarkup(payload: Dict[str, Any])
-Класс для хранения данных изображения  
+## class maxibot.types.InlineKeyboardMarkup(keyboard, row_width)
+Класс для создания inline-клавиатур в сообщениях. Сигнатура как у telebot: keyboard — готовый список рядов кнопок, row_width по умолчанию 3  
 **Параметры:**
-* **MAX_ROWS** (`int`) - Ограничение максимального кол-ва кнопок в ряду  
-* **MAX_BUTTONS** (`int`) - Ограничение максимального кол-ва кнопок в клавиатуре  
-* **MAX_ROW_REGULAR** (`int`) - Кол-во рядов простых кнопок по умолчанию  
-* **MAX_ROW_SPECIAL** (`int`) - Кол-во рядов специальных кнопок по умолчанию  
-* **row_width** (`int`) - Кол-во рядок кнопок  
+* **MAX_ROWS** (`int`) - Максимум рядов в клавиатуре (30)  
+* **MAX_BUTTONS** (`int`) - Максимум кнопок во всей клавиатуре (210)  
+* **MAX_ROW_REGULAR** (`int`) - Максимум кнопок в ряду без специальных кнопок (7)  
+* **MAX_ROW_SPECIAL** (`int`) - Максимум кнопок в ряду, где есть кнопка link, open_app, request_contact или request_geo_location (3)  
+* **row_width** (`int`) - Сколько кнопок в ряду по умолчанию при add()  
 * **keyboard** (`List[List[InlineKeyboardButton]]`) - Список объектов типа InlineKeyboardButton (inline-кнопка)  
-## class maxibot.types.InlineKeyboardButton(text, url, callback_data)
-Класс для создания inline-кнопок в сообщениях  
+## class maxibot.types.InlineKeyboardButton(text, url, callback_data, web_app, switch_inline_query, switch_inline_query_current_chat, switch_inline_query_chosen_chat, callback_game, pay, login_url)
+Класс для создания inline-кнопок в сообщениях. Сигнатура один в один с telebot. Кнопка должна быть ровно одного вида: `url` (link), `callback_data` (callback) или `web_app` (open_app). В ряду с кнопками link и open_app не больше 3 кнопок  
 **Параметры:**
 * **MAX_URL_LEN** (`int`) - Ограничение максимально длины ссылки в поле url  
 * **text** (`str`) - Текст на кнопке  
 * **url** (`str`) - URL ссылка для кнопки типа "link"  
 * **callback_data** (`str`) - Данные для callback-кнопки  
+* **web_app** (`WebAppInfo`) - Мини-приложение для кнопки типа "open_app" (можно строкой — username бота или ссылка на него)  
+* **switch_inline_query**, **switch_inline_query_current_chat**, **switch_inline_query_chosen_chat**, **callback_game**, **pay**, **login_url** - Принимаются для совместимости с telebot и игнорируются: inline-режима, игр и платежей в MAX нет; кнопка только с таким параметром не собирается (ValueError)  
+## class maxibot.types.WebAppInfo(url, contact_id, payload)
+Мини-приложение для кнопки `InlineKeyboardButton(web_app=...)`. Сигнатура как у telebot. В MAX кнопка open_app открывает мини-приложение бота (адрес приложения задаётся в настройках бота), поэтому `url` — это username бота или ссылка на него  
+**Параметры:**
+* **url** (`str`) - Публичное имя (username) бота (ведущий @ отбрасывается) или ссылка на него — поле web_app кнопки open_app; None допустим, если задан contact_id. Адрес самого приложения сюда не подходит — будет предупреждение в лог  
+* **contact_id** (`int`) - ID бота, чьё мини-приложение надо открыть — поле contact_id кнопки open_app (только в MAX)  
+* **payload** (`str`) - Параметр запуска, который попадёт в initData мини-приложения — поле payload кнопки open_app (только в MAX)  
 ## class maxibot.types.UpdateType
 Типы обновлений, которые можно получать от MAX API (объект Update в документации; тот же список строк — `maxibot.util.update_types`)  
 **Параметры:**
