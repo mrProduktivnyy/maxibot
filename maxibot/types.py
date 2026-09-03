@@ -1,4 +1,5 @@
 # from dataclasses import dataclass
+import traceback
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -1042,3 +1043,43 @@ class CallbackQuery:
         if 'notification' not in kwargs:
             kwargs['notification'] = "Обновлено!"
         return self.answer(text=text, **kwargs)
+
+
+class Update(JsonDeserializable):
+    """
+    Обновление от MAX API целиком (аналог telebot.types.Update). Его
+    получают middleware без update_types; в message, edited_message и
+    callback_query лежат те же объекты, которые затем попадут в
+    обработчики, поэтому атрибуты, выставленные на них в middleware,
+    видны и обработчикам. Как в telebot, заполнено только поле своего
+    типа обновления; сырой payload всегда доступен в json
+
+    :param update: Обновление от MAX API
+    :type update: Dict[str, Any]
+
+    :param api: Объект API
+    :type api: Api
+    """
+
+    def __init__(self, update: Dict[str, Any], api: Api):
+        self.json: Dict[str, Any] = update
+        self.update_type: Optional[str] = update.get("update_type")
+        self.timestamp: Optional[int] = update.get("timestamp")
+        self.message: Optional[Message] = None
+        self.edited_message: Optional[Message] = None
+        self.callback_query: Optional[CallbackQuery] = None
+        try:
+            if self.update_type in (UpdateType.BOT_STARTED, UpdateType.BOT_ADDED) or \
+                    self.update_type == UpdateType.MESSAGE_CREATED and "message" in update:
+                # bot_started и bot_added бот обрабатывает как сообщения
+                # (/start и появление в чате), поэтому они тоже в message
+                self.message = Message(update=update, api=api)
+            elif self.update_type == UpdateType.MESSAGE_EDITED and "message" in update:
+                self.edited_message = Message(update=update, api=api)
+            elif self.update_type == UpdateType.MESSAGE_CALLBACK and "callback" in update:
+                self.callback_query = CallbackQuery(update=update, api=api)
+        except Exception:
+            # payload, который парсер не понял (например, пост канала без
+            # sender): общие middleware всё равно получат Update с сырым json,
+            # а до обработчиков такое обновление не дойдёт — как и раньше
+            print(f"Error while parsing update {self.update_type}: {traceback.format_exc()}")

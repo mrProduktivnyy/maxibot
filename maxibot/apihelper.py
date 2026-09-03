@@ -6,6 +6,9 @@ from maxibot.core.network.client import Client
 
 proxy = None
 ignore_warnings = True
+# Как telebot.apihelper.ENABLE_MIDDLEWARE: регистрация middleware
+# (bot.middleware_handler) работает только после ENABLE_MIDDLEWARE = True
+ENABLE_MIDDLEWARE = False
 
 
 class Api:
