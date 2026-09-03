@@ -99,7 +99,7 @@ class FakeApi:
 
 
 def make_bot(api):
-    bot = MaxiBot.__new__(MaxiBot)
+    bot = MaxiBot("t")  # конструктор сеть не трогает
     bot.api = api
     bot.count_retries = 10
     bot.send_retry_timeout = 120

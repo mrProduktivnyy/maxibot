@@ -41,7 +41,7 @@ class FakeClient:
 def make_bot():
     api = Api.__new__(Api)
     api.client = FakeClient()
-    bot = MaxiBot.__new__(MaxiBot)
+    bot = MaxiBot("t")  # конструктор сеть не трогает
     bot.api = api
     return bot
 

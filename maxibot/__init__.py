@@ -10,8 +10,9 @@ import traceback
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Callable, Union
 
+from maxibot import apihelper, util
 from maxibot.apihelper import Api
-from maxibot.types import Message, CallbackQuery, InputMedia
+from maxibot.types import Message, CallbackQuery, InputMedia, Update
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.exceptions import (
@@ -26,6 +27,30 @@ from maxibot.core.network.webhook import WebhookServer
 
 
 HandlerFunc = Callable[[Message], None]
+
+# Имена типов обновлений telebot, у которых есть точный аналог в MAX:
+# перенесённый @bot.middleware_handler(update_types=['message']) работает как есть
+_TELEBOT_UPDATE_TYPES = {
+    "message": UpdateType.MESSAGE_CREATED,
+    "edited_message": UpdateType.MESSAGE_EDITED,
+    "callback_query": UpdateType.MESSAGE_CALLBACK,
+}
+
+# Типы обновлений telebot, которых в MAX нет (каналы, инлайн-режим, платежи,
+# опросы, реакции): такой middleware регистрируется вхолостую с предупреждением,
+# чтобы перенесённый бот запускался — как с inline_handler
+_TELEBOT_ONLY_UPDATE_TYPES = frozenset((
+    "channel_post", "edited_channel_post", "inline_query", "chosen_inline_result",
+    "shipping_query", "pre_checkout_query", "poll", "poll_answer", "my_chat_member",
+    "chat_member", "chat_join_request", "message_reaction", "message_reaction_count",
+    "chat_boost", "removed_chat_boost",
+))
+
+# Типы обновлений, у которых есть свой объект (Message или CallbackQuery)
+_OBJECT_UPDATE_TYPES = (
+    UpdateType.MESSAGE_CREATED, UpdateType.BOT_STARTED, UpdateType.BOT_ADDED,
+    UpdateType.MESSAGE_EDITED, UpdateType.MESSAGE_CALLBACK,
+)
 
 logger = logging.getLogger("maxibot")
 
@@ -76,12 +101,32 @@ class MaxiBot:
     """
     Главный класс бота
     """
-    def __init__(self, token: str, threaded: bool = True, num_threads: int = 2):
+    def __init__(
+        self,
+        token: str,
+        parse_mode: Optional[str] = None,
+        threaded: bool = True,
+        skip_pending: bool = False,
+        num_threads: int = 2
+    ):
         """
         Метод инициализации бота
 
         :param token: Токен бота
         :type token: str
+
+        :param parse_mode: Разметка на весь уровень бота: используется всеми
+            методами отправки и редактирования, если parse_mode не задан в
+            самом вызове (как в telebot). None — прежнее поведение каждого
+            метода: send_message, edit_message_media и edit_message_reply_markup
+            размечают текст как markdown, а подписи к вложениям и
+            edit_message_text уходят без разметки
+        :type parse_mode: Optional[str]
+
+        :param skip_pending: Пропустить обновления, накопленные до запуска
+            бота. Как в telebot, пропуск выполняется один раз — при старте
+            поллинга
+        :type skip_pending: bool
 
         :param threaded: Как в telebot: если True (по умолчанию),
             обработчики выполняются в пуле потоков и медленный обработчик
@@ -93,7 +138,20 @@ class MaxiBot:
             (используется при threaded=True). По умолчанию 2, как в telebot
         :type num_threads: int
         """
+        if parse_mode is not None and not isinstance(parse_mode, str):
+            # второй позиционный параметр раньше был threaded: без этой проверки
+            # MaxiBot(token, False) молча снял бы разметку со всех сообщений,
+            # а MaxiBot(token, True) отправил бы в MAX невалидный format: true
+            raise TypeError(
+                "parse_mode должен быть строкой ('markdown' или 'html'), получено "
+                f"{type(parse_mode).__name__}. Порядок параметров — как в telebot: "
+                "MaxiBot(token, parse_mode, threaded, skip_pending, num_threads), "
+                "поэтому threaded и num_threads передавайте по имени: "
+                "MaxiBot(token, threaded=False, num_threads=4)"
+            )
         self.api = Api(token=token)
+        self.parse_mode = parse_mode
+        self.skip_pending = skip_pending
         self.threaded = threaded
         self.num_threads = num_threads
         if threaded:
@@ -111,6 +169,10 @@ class MaxiBot:
         }
         self.message_handlers = []
         self.callback_query_handlers = []
+        # middleware (см. middleware_handler): по типам обновлений MAX и общие.
+        # Как в telebot, регистрация требует apihelper.ENABLE_MIDDLEWARE = True
+        self.typed_middleware_handlers: Dict[str, List[Callable]] = {t: [] for t in util.update_types}
+        self.default_middleware_handlers: List[Callable] = []
         self.poll = None
         self._webhook: WebhookServer = None
         self.is_running = False
@@ -261,6 +323,11 @@ class MaxiBot:
         if self.is_running:
             print("Bot is already running")
             return None
+        if self.skip_pending:
+            # как в telebot: пропуск накопленных обновлений выполняется один
+            # раз, чтобы перезапуск поллинга не терял свежие сообщения
+            self._skip_updates()
+            self.skip_pending = False
         self.is_running = True
         self.poll = Polling(api=self.api, allowed_updates=allowed_updates)
         await self.poll.loop(self._process_update)
@@ -302,6 +369,143 @@ class MaxiBot:
             self.message_handlers.append(handler_dict)
             return funcs
         return decorator
+
+    def middleware_handler(self, update_types: Optional[List[str]] = None):
+        """
+        Декоратор для регистрации middleware — функции, которую бот вызывает
+        для каждого обновления до любых обработчиков. Сигнатура один в один
+        с telebot.middleware_handler; как и в telebot, сначала нужно
+        включить apihelper.ENABLE_MIDDLEWARE = True, иначе регистрация
+        бросит RuntimeError.
+
+        Middleware получает два аргумента: бота и обновление. С update_types
+        это объект своего типа: Message для message_created и
+        message_edited, CallbackQuery для message_callback; у остальных
+        типов (message_removed, bot_stopped, user_added...) своего объекта
+        нет — придёт Update целиком, сырой payload в update.json. Как в
+        telebot, middleware для message_created получает каждое сообщение,
+        которое дойдёт до обработчиков сообщений: в MAX это и bot_started
+        (кнопка «Начать» приходит как /start), и bot_added. Без
+        update_types middleware вызывается для всех обновлений и получает
+        Update. Обработчики получают те же объекты, поэтому атрибуты,
+        выставленные в middleware, видны в обработчике.
+
+        Порядок — как в telebot: сначала middleware своего типа, затем
+        общие, потом обработчики. Middleware выполняется до обработчиков в
+        потоке, принявшем обновление, даже при threaded=True: при поллинге
+        это единственный поток поллинга, и долгая работа в middleware
+        задержит остальные обновления; при webhook у каждого запроса свой
+        поток, и middleware разных обновлений выполняются параллельно.
+        Исключение в middleware печатается, а обновление дальше не
+        обрабатывается — обработчики не вызываются (как telebot с
+        suppress_middleware_excepions=True; ронять поллинг, как telebot по
+        умолчанию, maxibot не станет).
+
+        Пример:
+
+            from maxibot import MaxiBot, apihelper
+
+            apihelper.ENABLE_MIDDLEWARE = True
+            bot = MaxiBot("TOKEN")
+
+            @bot.middleware_handler(update_types=['message_created'])
+            def add_lang(bot_instance, message):
+                message.lang = message.from_user.language_code or "ru"
+
+            @bot.middleware_handler()
+            def log_update(bot_instance, update):
+                print(update.update_type, update.json)
+
+        :param update_types: Типы обновлений MAX, для которых вызывать
+            middleware (все — в maxibot.util.update_types); телеботовские
+            'message', 'edited_message' и 'callback_query' тоже принимаются,
+            а типы telebot, которых в MAX нет (channel_post, inline_query...),
+            пропускаются с предупреждением в логе — перенесённый бот
+            запускается, как и с inline_handler. None — для всех обновлений
+        :type update_types: Optional[List[str]]
+
+        :return: Декоратор, возвращающий функцию без изменений
+        :rtype: Callable
+        """
+        def decorator(handler):
+            self.add_middleware_handler(handler, update_types)
+            return handler
+
+        return decorator
+
+    def add_middleware_handler(self, handler, update_types=None):
+        """
+        Регистрирует middleware (см. middleware_handler). Сигнатура один в
+        один с telebot.add_middleware_handler
+
+        :param handler: Функция middleware: handler(bot, update)
+        :type handler: Callable
+
+        :param update_types: Типы обновлений, None — все
+        :type update_types: Optional[List[str]]
+
+        :raises RuntimeError: если не включён apihelper.ENABLE_MIDDLEWARE
+        :raises ValueError: если тип обновления неизвестен ни MAX, ни telebot
+        """
+        if not apihelper.ENABLE_MIDDLEWARE:
+            raise RuntimeError(
+                "Middleware выключены. Как в telebot, до регистрации выполните "
+                "apihelper.ENABLE_MIDDLEWARE = True (from maxibot import apihelper)"
+            )
+        if not update_types:
+            self.default_middleware_handlers.append(handler)
+            return
+        if isinstance(update_types, str):
+            update_types = [update_types]
+        resolved, unsupported, unknown = [], [], []
+        for update_type in update_types:
+            update_type = _TELEBOT_UPDATE_TYPES.get(update_type, update_type)
+            if update_type in self.typed_middleware_handlers:
+                resolved.append(update_type)
+            elif update_type in _TELEBOT_ONLY_UPDATE_TYPES:
+                unsupported.append(update_type)
+            else:
+                unknown.append(update_type)
+        if unknown:
+            # telebot молча сделал бы такой middleware общим, и он получал бы все
+            # обновления не того типа — лучше упасть при регистрации
+            raise ValueError(
+                f"Нет таких типов обновлений в MAX: {', '.join(map(repr, unknown))}. "
+                f"Доступны: {', '.join(util.update_types)}; из telebot принимаются "
+                f"{', '.join(_TELEBOT_UPDATE_TYPES)}"
+            )
+        if unsupported:
+            name = getattr(handler, "__name__", repr(handler))
+            if resolved:
+                logger.warning(
+                    "Middleware %s: обновлений %s в MAX нет, для них он вызван не будет",
+                    name, ", ".join(unsupported)
+                )
+            else:
+                logger.warning(
+                    "Middleware %s зарегистрирован, но никогда не будет вызван: "
+                    "обновлений %s в MAX нет", name, ", ".join(unsupported)
+                )
+        # алиас и имя MAX в одном списке ('message', 'message_created') — одна регистрация
+        for update_type in dict.fromkeys(resolved):
+            self.typed_middleware_handlers[update_type].append(handler)
+
+    def register_middleware_handler(self, callback, update_types=None):
+        """
+        Регистрирует middleware без декоратора (см. middleware_handler).
+        Сигнатура один в один с telebot.register_middleware_handler
+
+            bot.register_middleware_handler(log_update, update_types=['message_created'])
+
+        :param callback: Функция middleware: callback(bot, update)
+        :type callback: Callable
+
+        :param update_types: Типы обновлений, None — все
+        :type update_types: Optional[List[str]]
+
+        :return: None
+        """
+        self.add_middleware_handler(callback, update_types)
 
     def run_handler(self, context: Message, message_handlers: List[Dict]):
         """
@@ -387,36 +591,88 @@ class MaxiBot:
         #     if pattern == text or re.search(pattern, text):
         #         handler(context)
 
+    def process_middlewares(self, update: Update) -> bool:
+        """
+        Прогоняет обновление через middleware (аналог
+        telebot.process_middlewares): сначала middleware своего типа, затем
+        общие. Middleware своего типа получает объект этого типа (Message,
+        CallbackQuery), а если у типа обновления своего объекта нет —
+        Update; общий middleware всегда получает Update.
+
+        Как в telebot, middleware для message_created получает каждое
+        сообщение, которое дойдёт до обработчиков сообщений, — в MAX это и
+        bot_started (кнопка «Начать» приходит как /start), и bot_added;
+        затем вызываются middleware самого типа обновления, каждая функция
+        — один раз
+
+        :param update: Обновление
+        :type update: Update
+
+        :return: False, если какой-то middleware упал — обновление тогда
+            дальше не обрабатывается
+        :rtype: bool
+        """
+        if update.message is not None:
+            context, types = update.message, [UpdateType.MESSAGE_CREATED, update.update_type]
+        elif update.edited_message is not None:
+            context, types = update.edited_message, [UpdateType.MESSAGE_EDITED]
+        elif update.callback_query is not None:
+            context, types = update.callback_query, [UpdateType.MESSAGE_CALLBACK]
+        elif update.update_type in _OBJECT_UPDATE_TYPES:
+            # объект своего типа построить не удалось — как в telebot, middleware
+            # этого типа пропускаем, общие всё равно получат Update
+            context, types = update, []
+        else:
+            context, types = update, [update.update_type]
+        typed = []
+        for update_type in dict.fromkeys(types):
+            for middleware in self.typed_middleware_handlers.get(update_type, []):
+                if middleware not in typed:
+                    typed.append(middleware)
+        calls = [(m, context) for m in typed] + [(m, update) for m in self.default_middleware_handlers]
+        for middleware, ctx in calls:
+            try:
+                middleware(self, ctx)
+            except Exception:
+                name = getattr(middleware, "__qualname__", repr(middleware))
+                print(f"Error in middleware {name}, update skipped: {traceback.format_exc()}")
+                return False
+        return True
+
     def _process_update(self, update: Dict[str, Any]):
         """
-        Метод для обработки входящего полученного обновления
+        Метод для обработки входящего полученного обновления: сначала
+        middleware, затем обработчики
 
         :param update: Данные по обновлениям
         :type update: Dict[str, Any]
         """
         try:
-            # print("===============\nUPDATE RECEIVED\n===============")
-            # print(f"Update type: {update.get('update_type')}")
-            # print(f"Full update: {json.dumps(update, indent=2)}")
-
             update_type = update.get("update_type")
-            if update_type == UpdateType.MESSAGE_CREATED and "message" in update.keys() or \
-               update_type == UpdateType.BOT_STARTED or update_type == UpdateType.BOT_ADDED:
-                context = Message(update, self.api)
+            has_handlers = update_type in (
+                UpdateType.MESSAGE_CREATED, UpdateType.BOT_STARTED, UpdateType.BOT_ADDED, UpdateType.MESSAGE_CALLBACK
+            )
+            if not has_handlers and not (
+                self.default_middleware_handlers or self.typed_middleware_handlers.get(update_type)
+            ):
+                # остальные типы обновлений бот не обрабатывает — объекты не
+                # строим: Message ради названия чата ходит в API
+                return
+            upd = Update(update, self.api)
+            if not self.process_middlewares(upd):
+                return
+            if upd.message is not None:
                 # атомарный pop вместо `in` + pop: clear_step_handler может
                 # выполняться в воркере параллельно и убрать ключ между
                 # проверкой и извлечением — сообщение тогда потерялось бы
-                handler = self._next_steps.pop(context.from_user.id, None)
+                handler = self._next_steps.pop(upd.message.from_user.id, None)
                 if handler is not None:
-                    self._exec_task(handler.callback, context, *handler.args, **handler.kwargs)
+                    self._exec_task(handler.callback, upd.message, *handler.args, **handler.kwargs)
                 else:
-                    self._process_text_message(context)
-            elif update_type == UpdateType.MESSAGE_CALLBACK:
+                    self._process_text_message(upd.message)
+            elif upd.callback_query is not None:
                 print("Processing message_callback...")
-                if "callback" in update:
-                    callback = CallbackQuery(update, self.api)
-                    # print(f"Created callback: id={callback.id}, data={callback.data}")
-                    self._process_callback_query(callback)
+                self._process_callback_query(upd.callback_query)
         except Exception:
             print(f"Error while processing update: {traceback.format_exc()}")
 
@@ -442,6 +698,22 @@ class MaxiBot:
             task(*args, **kwargs)
         except Exception:
             print(f"Error while processing update: {traceback.format_exc()}")
+
+    def _resolve_parse_mode(self, parse_mode, default=None):
+        """
+        Определяет разметку сообщения. Как в telebot: parse_mode из вызова
+        важнее общей разметки бота (``MaxiBot(token, parse_mode=...)``), а
+        если не задан ни там, ни там — остаётся ``default``, прежнее
+        поведение конкретного метода. Пустая строка отключает разметку.
+
+        :param parse_mode: Разметка, переданная в вызов метода
+        :param default: Разметка метода по умолчанию
+
+        :return: Разметка в нижнем регистре (MAX ждёт markdown/html)
+        """
+        if parse_mode is None:
+            parse_mode = self.parse_mode if self.parse_mode is not None else default
+        return parse_mode.lower() if isinstance(parse_mode, str) else parse_mode
 
     def _check_text_length(self, text):
         """
@@ -705,7 +977,9 @@ class MaxiBot:
         :param caption: Текст сообщения под фото
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -729,7 +1003,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+        return self._send_attachments(chat_id, caption, final_attachments,
+                                      self._resolve_parse_mode(parse_mode),
                                       disable_link_preview=disable_web_page_preview)
 
     def send_media_group(
@@ -755,7 +1030,9 @@ class MaxiBot:
         :param caption: Текст сообщения под фото
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -780,7 +1057,8 @@ class MaxiBot:
                 final_attachments.append(reply_markup.to_attachment())
             else:
                 final_attachments.append(reply_markup)
-        return self._send_attachments(chat_id, caption, final_attachments, parse_mode,
+        return self._send_attachments(chat_id, caption, final_attachments,
+                                      self._resolve_parse_mode(parse_mode),
                                       disable_link_preview=disable_web_page_preview)
 
     def send_document(
@@ -807,7 +1085,9 @@ class MaxiBot:
         :param caption: Текст сообщения под фото
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -840,7 +1120,7 @@ class MaxiBot:
                 final_attachments.append(reply_markup)
         return self._send_attachments(
             chat_id, caption, final_attachments,
-            parse_mode.lower() if parse_mode else None,
+            self._resolve_parse_mode(parse_mode),
             disable_link_preview=disable_web_page_preview
         )
 
@@ -893,7 +1173,9 @@ class MaxiBot:
         :param caption: Текст сообщения под видео
         :type caption: Optional[str]
 
-        :param parse_mode: Разметка сообщения
+        :param parse_mode: Разметка подписи (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, подпись уходит без разметки
         :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
@@ -924,7 +1206,7 @@ class MaxiBot:
                 final_attachments.append(reply_markup)
         return self._send_attachments(
             chat_id, caption, final_attachments,
-            parse_mode.lower() if parse_mode else None,
+            self._resolve_parse_mode(parse_mode),
             disable_link_preview=disable_web_page_preview
         )
 
@@ -965,6 +1247,11 @@ class MaxiBot:
         :param message_id: Айди сообщения
         :type message_id: int
 
+        :param parse_mode: Разметка сообщения (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, текст уходит без разметки
+        :type parse_mode: Optional[str]
+
         :return: Информация об отправленном сообщении
         :rtype: Message | {} (не успех)
         """
@@ -981,7 +1268,7 @@ class MaxiBot:
             text=text,
             method="PUT",
             attachments=final_attachments,
-            parse_mode=parse_mode
+            parse_mode=self._resolve_parse_mode(parse_mode)
         )
 
         if isinstance(response, dict) and response.get("success"):
@@ -997,7 +1284,7 @@ class MaxiBot:
         chat_id: Union[str, int],
         message_id: str,
         reply_markup: Union[InlineKeyboardMarkup, Any] = None,
-        parse_mode: Union[str, Any] = "markdown"
+        parse_mode: Union[str, Any] = None
     ):
         """
         Метод изменения медиа сообщения `message_id` в чате `chat_id`
@@ -1010,6 +1297,12 @@ class MaxiBot:
 
         :param message_id: Айди сообщения
         :type message_id: int
+
+        :param parse_mode: Разметка подписи (markdown/html). Разметка самого
+            media (InputMedia(parse_mode=...)) важнее. Если не задана, берётся
+            общая разметка бота — MaxiBot(token, parse_mode=...); если и там
+            пусто, подпись размечается как markdown, как и раньше
+        :type parse_mode: Optional[str]
 
         :return: Информация об отправленном сообщении
         :rtype: Message | {} (не успех)
@@ -1027,7 +1320,10 @@ class MaxiBot:
             else:
                 final_attachments.append(reply_markup)
         text = get_text(media=media)
-        parse_mode = get_parse_mode(media=media, parse_mode=parse_mode)
+        parse_mode = get_parse_mode(
+            media=media,
+            parse_mode=self._resolve_parse_mode(parse_mode, default="markdown")
+        )
 
         response = self.api.send_message(
             msg_id=message_id,
@@ -1049,7 +1345,7 @@ class MaxiBot:
         chat_id: Union[str, int],
         message_id: str,
         reply_markup: Union[InlineKeyboardMarkup, Any] = None,
-        parse_mode: Union[str, Any] = "markdown"
+        parse_mode: Union[str, Any] = None
     ):
         """
         Метод изменения клавиатуры сообщения `message_id` в чате `chat_id`
@@ -1080,7 +1376,7 @@ class MaxiBot:
             msg_id=message_id,
             method="PUT",
             attachments=final_attachments,
-            parse_mode=parse_mode
+            parse_mode=self._resolve_parse_mode(parse_mode, default="markdown")
         )
 
         if isinstance(response, dict) and response.get("success"):
@@ -1096,7 +1392,7 @@ class MaxiBot:
         text: str,
         attachments: Optional[List[Dict[str, Any]]] = None,
         reply_markup: Optional[Any] = None,
-        parse_mode: str = "markdown",
+        parse_mode: Optional[str] = None,
         notify: bool = True,
         disable_web_page_preview: Optional[bool] = None,
         reply_to_message_id: Optional[str] = None
@@ -1112,6 +1408,12 @@ class MaxiBot:
 
         :param keyboard: Объект клавиатуры (будет добавлен к attachments)
         :type keyboard:
+
+        :param parse_mode: Разметка сообщения (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто, текст размечается как markdown, как и раньше.
+            Пустая строка отключает разметку
+        :type parse_mode: Optional[str]
 
         :param disable_web_page_preview: Если True, сервер не генерирует превью
             для ссылок в тексте (имя параметра как в telebot; в MAX API это
@@ -1150,7 +1452,7 @@ class MaxiBot:
                 chat_id=chat_id,
                 text=text,
                 attachments=final_attachments,
-                parse_mode=parse_mode.lower(),
+                parse_mode=self._resolve_parse_mode(parse_mode, default="markdown"),
                 notify=notify,
                 disable_link_preview=disable_web_page_preview,
                 link=link

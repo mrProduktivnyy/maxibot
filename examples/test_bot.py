@@ -18,6 +18,7 @@
     /edit           — редактирование сообщения, проверка edit_message_text
     /delete         — удаление сообщения, проверка delete_message
     /steps          — многошаговый диалог, проверка register_next_step_handler
+    /middleware     — атрибут, выставленный в middleware, проверка middleware_handler
     /reply          — ответ-цитата на команду, проверка reply_to
     /exception      — намеренный вызов ошибки, проверка MaxApiException
     любой текст     — эхо, проверка content_types и func-фильтра
@@ -28,7 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from maxibot import MaxiBot
+from maxibot import MaxiBot, apihelper
 from maxibot.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -42,7 +43,22 @@ if not TOKEN:
     print("Ошибка: переменная окружения MAX_BOT_TOKEN не задана")
     sys.exit(1)
 
+apihelper.ENABLE_MIDDLEWARE = True  # как в telebot: до регистрации middleware
 bot = MaxiBot(TOKEN)
+
+
+# ---------------------------------------------------------------------------
+# Middleware — вызываются до обработчиков для каждого обновления
+# ---------------------------------------------------------------------------
+
+@bot.middleware_handler()
+def log_update(bot_instance, update):
+    print(f"[middleware] update_type={update.update_type}")
+
+
+@bot.middleware_handler(update_types=["message_created"])
+def stamp_message(bot_instance, message):
+    message.middleware_tag = f"middleware видел текст {message.text!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +82,7 @@ def cmd_start(message):
         "/edit — тест edit\\_message\\_text\n"
         "/delete — тест delete\\_message\n"
         "/steps — тест register\\_next\\_step\\_handler\n"
+        "/middleware — тест middleware\\_handler\n"
         "/reply — тест reply\\_to\n"
         "/exception — тест обработки исключений"
     )
@@ -277,6 +294,15 @@ def cmd_exception(message):
             message.chat.id,
             f"Исключение поймано:\n`{type(e).__name__}: {e}`"
         )
+
+
+# ---------------------------------------------------------------------------
+# /middleware — middleware_handler
+# ---------------------------------------------------------------------------
+
+@bot.message_handler(commands=["middleware"])
+def cmd_middleware(message):
+    bot.send_message(message.chat.id, f"Атрибут из middleware: {message.middleware_tag}")
 
 
 # ---------------------------------------------------------------------------

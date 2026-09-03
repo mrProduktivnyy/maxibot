@@ -50,7 +50,7 @@ def make_update(user_id=7, text="привет"):
 # 1. Сигнатура и дефолты — как в telebot (threaded=True, num_threads=2)
 sig = inspect.signature(MaxiBot.__init__)
 params = list(sig.parameters)
-assert params == ["self", "token", "threaded", "num_threads"], params
+assert params == ["self", "token", "parse_mode", "threaded", "skip_pending", "num_threads"], params
 assert sig.parameters["threaded"].default is True
 assert sig.parameters["num_threads"].default == 2
 bot = MaxiBot("t")  # без фейка: конструктор сеть не трогает
