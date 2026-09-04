@@ -183,6 +183,23 @@ class Api:
         """
         return self.client.request("GET", f"/chats/{chat_id}")
 
+    def send_action(self, chat_id, action: str, timeout=None):
+        """
+        Апи метод отправки действия бота в чат (POST /chats/{chatId}/actions):
+        участники видят индикатор «печатает…», «отправляет фото» и т.п.
+
+        :param chat_id: Идентификатор чата
+        :param action: Действие MAX (enum SenderAction): typing_on,
+            sending_photo, sending_video, sending_audio, sending_file
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"success": bool, "message": str})
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "POST", f"/chats/{chat_id}/actions", data={"action": action}, timeout=timeout
+        )
+
     def get_bot_info(self):
         """
         Апи метод для получения информации о боте

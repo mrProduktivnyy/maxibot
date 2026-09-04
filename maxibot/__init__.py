@@ -53,6 +53,26 @@ _OBJECT_UPDATE_TYPES = (
     UpdateType.MESSAGE_EDITED, UpdateType.MESSAGE_CALLBACK,
 )
 
+# Маппинг действий telebot.send_chat_action в действия MAX
+# (POST /chats/{chatId}/actions, enum SenderAction: typing_on, sending_photo,
+# sending_video, sending_audio, sending_file). Отдельных индикаторов для
+# стикеров, геолокации и кружков в MAX нет — уходит ближайший по смыслу
+_CHAT_ACTIONS = {
+    "typing": "typing_on",
+    "upload_photo": "sending_photo",
+    "record_video": "sending_video",
+    "upload_video": "sending_video",
+    "record_video_note": "sending_video",
+    "upload_video_note": "sending_video",
+    "record_voice": "sending_audio",
+    "upload_voice": "sending_audio",
+    "record_audio": "sending_audio",  # прежние имена voice-действий Telegram
+    "upload_audio": "sending_audio",
+    "upload_document": "sending_file",
+    "choose_sticker": "typing_on",
+    "find_location": "typing_on",
+}
+
 logger = logging.getLogger("maxibot")
 # как в telebot: у логгера из коробки свой stderr-хендлер — не перехваченные
 # ошибки видны без настройки logging, а maxibot.logger.setLevel(logging.DEBUG)
@@ -1573,6 +1593,56 @@ class MaxiBot:
             ),
             api=self.api
         )
+
+    def send_chat_action(
+        self,
+        chat_id: Union[int, str],
+        action: str,
+        timeout: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> bool:
+        """
+        Отправляет действие бота в чат — участники видят индикатор
+        «печатает…», «отправляет фото» и т.п. (POST /chats/{chatId}/actions).
+        Сигнатура один в один с telebot.send_chat_action. Индикатор живёт
+        несколько секунд — для долгой операции вызов надо повторять.
+
+        Имена действий telebot мапятся в действия MAX:
+        typing -> typing_on; upload_photo -> sending_photo;
+        record_video/upload_video и кружки record_video_note/
+        upload_video_note -> sending_video; record_voice/upload_voice
+        (и прежние record_audio/upload_audio) -> sending_audio;
+        upload_document -> sending_file. Отдельных индикаторов для
+        choose_sticker и find_location в MAX нет — уходит typing_on.
+        Родные значения MAX (typing_on, sending_photo, sending_video,
+        sending_audio, sending_file) принимаются как есть.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param action: Действие — имя telebot или родное имя MAX (см.
+            выше); незнакомое имя уходит в MAX как есть и вернёт ошибку API
+        :type action: str
+
+        :param timeout: Таймаут запроса в секундах
+        :type timeout: Optional[int]
+
+        :param message_thread_id: Принимается для совместимости с telebot
+            и игнорируется — тредов в MAX нет
+        :type message_thread_id: Optional[int]
+
+        :return: True при успехе; False, если MAX ответил success: false —
+            telebot в такой ситуации бросает ApiTelegramException, поэтому
+            при переносе проверяйте возврат. HTTP-ошибки, как и в telebot,
+            бросают исключение (MaxApiHTTPException)
+        :rtype: bool
+        """
+        # как в telebot: timeout=0 означает «без своего таймаута» (falsy
+        # отбрасывается), а не нулевой HTTP-таймаут
+        response = self.api.send_action(
+            chat_id, _CHAT_ACTIONS.get(action, action), timeout=timeout or None
+        )
+        return bool(isinstance(response, dict) and response.get("success", False))
 
     def reply_to(self, message: Message, text: str, **kwargs) -> Message:
         """

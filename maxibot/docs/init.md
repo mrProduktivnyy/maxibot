@@ -92,6 +92,11 @@
     * **notify** - Флаг звукового уведомления отправки сообщения  
     * **disable_web_page_preview** - Отключить предпросмотр ссылок  
     * **reply_to_message_id** - Идентификатор сообщения, на которое бот ответит цитатой  
+* **send_chat_action** (`chat_id`, `action`, `timeout`, `message_thread_id`) - Отправляет действие бота в чат: индикатор «печатает…», «отправляет фото» и т.п. Сигнатура как в telebot; индикатор живёт несколько секунд, для долгих операций вызов повторяют. Возвращает True при успехе и False, если MAX ответил `success: false` (telebot в этой ситуации бросает ApiTelegramException — при переносе проверяйте возврат); HTTP-ошибки бросают MaxApiHTTPException  
+    * **chat_id** - Чат, куда надо отправить действие  
+    * **action** - Имя telebot (`typing`, `upload_photo`, `record_video`, `upload_video`, `record_voice`, `upload_voice`, `record_audio`, `upload_audio`, `upload_document`, `record_video_note`, `upload_video_note`) мапится в действия MAX; `choose_sticker` и `find_location` уходят как `typing_on` — своих индикаторов в MAX нет; родные имена MAX (`typing_on`, `sending_photo`, `sending_video`, `sending_audio`, `sending_file`) проходят как есть  
+    * **timeout** - Таймаут запроса в секундах  
+    * **message_thread_id** - Принимается для совместимости с telebot и игнорируется — тредов в MAX нет  
 * **get_message** (`message_id`) - Метод получения сообщения по айди  
     * **message_id** - Идентификатор сообщения, которое надо получить  
 * **callback_query_handler** (`data` `**kwargs`) - Декоратор для регистрации обработчиков callback-запросов от inline-кнопок  
