@@ -50,7 +50,10 @@ def make_update(user_id=7, text="привет"):
 # 1. Сигнатура и дефолты — как в telebot (threaded=True, num_threads=2)
 sig = inspect.signature(MaxiBot.__init__)
 params = list(sig.parameters)
-assert params == ["self", "token", "parse_mode", "threaded", "skip_pending", "num_threads"], params
+assert params == [
+    "self", "token", "parse_mode", "threaded", "skip_pending", "num_threads",
+    "exception_handler",
+], params
 assert sig.parameters["threaded"].default is True
 assert sig.parameters["num_threads"].default == 2
 bot = MaxiBot("t")  # без фейка: конструктор сеть не трогает
@@ -110,7 +113,22 @@ while len(results) < 2 and time.monotonic() < deadline:
 assert results == ["ok", "ok"], results
 print('4 ok: два обработчика работают параллельно')
 
-# 5. Исключение в обработчике не роняет бота и печатается, а не теряется в Future
+# 5. Исключение в обработчике не роняет бота и логируется, а не теряется в Future
+import logging
+
+
+class _LogCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+capture = _LogCapture()
+maxi_logger = logging.getLogger("maxibot")
+maxi_logger.addHandler(capture)
 bot = make_bot()
 crashed = threading.Event()
 
@@ -119,16 +137,21 @@ def handle_crash(message):
     crashed.set()
     raise RuntimeError("авария в обработчике")
 
+def logged():
+    return "\n".join(r.getMessage() for r in capture.records)
+
 buf = io.StringIO()
 with redirect_stdout(buf):
     bot._process_update(make_update())
     assert crashed.wait(5)
     deadline = time.monotonic() + 5
-    while "авария в обработчике" not in buf.getvalue() and time.monotonic() < deadline:
+    while "авария в обработчике" not in logged() and time.monotonic() < deadline:
         time.sleep(0.05)
-assert "авария в обработчике" in buf.getvalue()
-assert "Error while processing update" in buf.getvalue()
-print('5 ok: исключение в пуле печатается, бот жив')
+maxi_logger.removeHandler(capture)
+assert "авария в обработчике" in logged(), logged()
+assert "Error in handler" in logged(), logged()
+assert buf.getvalue() == "", buf.getvalue()  # ошибка уходит в логгер, а не print
+print('5 ok: исключение в пуле логируется, бот жив')
 
 # 6. next_step-обработчики тоже уходят в пул
 bot = make_bot()

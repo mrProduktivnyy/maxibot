@@ -6,7 +6,7 @@
 бот вызывает для каждого обновления до обработчиков — в потоке приёма
 обновлений и с тем же объектом, который потом получит обработчик. Без
 update_types middleware получает Update целиком и вызывается для всех
-обновлений. Исключение в middleware печатается, обновление пропускается.
+обновлений. Исключение в middleware логируется, обновление пропускается.
 
 Запуск:
     python3 tests/test_middleware.py
@@ -246,7 +246,7 @@ bot._process_update(message_update())
 assert order == ["typed", "default", "handler"], order
 print('8 ok: порядок — типизированные, общие, обработчик')
 
-# 9. Исключение в middleware печатается, обновление пропускается, бот жив
+# 9. Исключение в middleware логируется, обновление пропускается, бот жив
 bot = make_bot()
 handled = []
 
@@ -262,17 +262,31 @@ def handle_guarded(message):
     handled.append(message.text)
 
 
+class _LogCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+capture = _LogCapture()
+maxi_logger = logging.getLogger("maxibot")
+maxi_logger.addHandler(capture)
 buf = io.StringIO()
 with redirect_stdout(buf):
     bot._process_update(message_update(text="плохо"))
     bot._process_update(message_update(text="хорошо"))
 assert handled == ["хорошо"], handled
-assert "авария в middleware" in buf.getvalue() and "guard" in buf.getvalue(), buf.getvalue()
-assert "update skipped" in buf.getvalue()  # именно ветка process_middlewares, а не общий except
-with redirect_stdout(io.StringIO()):
-    assert bot.process_middlewares(Update(message_update(text="плохо"), bot.api)) is False
-    assert bot.process_middlewares(Update(message_update(text="хорошо"), bot.api)) is True
-print('9 ok: исключение в middleware печатается, обновление пропускается')
+logged = "\n".join(r.getMessage() for r in capture.records)
+assert "авария в middleware" in logged and "guard" in logged, logged
+assert "update skipped" in logged  # именно ветка process_middlewares, а не общий except
+assert buf.getvalue() == "", buf.getvalue()  # ошибка уходит в логгер, а не print в stdout
+assert bot.process_middlewares(Update(message_update(text="плохо"), bot.api)) is False
+assert bot.process_middlewares(Update(message_update(text="хорошо"), bot.api)) is True
+maxi_logger.removeHandler(capture)
+print('9 ok: исключение в middleware логируется, обновление пропускается')
 
 # 10. threaded=True: middleware в потоке приёма обновлений, обработчик в пуле
 #     видит его изменения
@@ -389,7 +403,7 @@ assert typed_calls == [] and len(default_calls) == 1 and default_calls[0].messag
 print('15 ok: без объекта своего типа middleware типа пропускаются')
 
 # 16. Payload, который парсер не понял (пост канала без sender): общий
-#     middleware всё равно получает Update с сырым json, ошибка печатается,
+#     middleware всё равно получает Update с сырым json, ошибка логируется,
 #     до обработчиков обновление не доходит — как и раньше
 bot = make_bot()
 default_calls, handled = [], []
@@ -403,12 +417,14 @@ def on_any_16(message):
 
 channel_post = message_update()
 del channel_post["message"]["sender"]
-buf = io.StringIO()
-with redirect_stdout(buf):
-    bot._process_update(channel_post)
+capture = _LogCapture()
+maxi_logger.addHandler(capture)
+bot._process_update(channel_post)
+maxi_logger.removeHandler(capture)
 assert len(default_calls) == 1 and default_calls[0].message is None
 assert default_calls[0].json is channel_post and handled == []
-assert "Error while parsing update message_created" in buf.getvalue(), buf.getvalue()
-print('16 ok: непонятный payload — общий middleware получает Update, ошибка печатается')
+logged = "\n".join(r.getMessage() for r in capture.records)
+assert "Error while parsing update message_created" in logged, logged
+print('16 ok: непонятный payload — общий middleware получает Update, ошибка логируется')
 
 print('ALL OK')

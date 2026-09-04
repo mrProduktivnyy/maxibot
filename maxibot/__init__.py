@@ -3,6 +3,7 @@ import asyncio
 import logging
 import queue
 import re
+import sys
 import threading
 import time
 import traceback
@@ -53,6 +54,18 @@ _OBJECT_UPDATE_TYPES = (
 )
 
 logger = logging.getLogger("maxibot")
+# как в telebot: у логгера из коробки свой stderr-хендлер — не перехваченные
+# ошибки видны без настройки logging, а maxibot.logger.setLevel(logging.DEBUG)
+# включает traceback'и (у telebot — telebot.logger, формат строки тот же).
+# Уровень WARNING, а не телеботовский ERROR: предупреждения совместимости
+# (content_types=['file'], channel_post, WebAppInfo и т.п.) должны быть видны
+formatter = logging.Formatter(
+    '%(asctime)s (%(filename)s:%(lineno)d %(threadName)s) %(levelname)s - %(name)s: "%(message)s"'
+)
+console_output_handler = logging.StreamHandler(sys.stderr)
+console_output_handler.setFormatter(formatter)
+logger.addHandler(console_output_handler)
+logger.setLevel(logging.WARNING)
 
 
 @dataclass
@@ -63,6 +76,32 @@ class StepHandler:
     timestamp: float
 
 
+class ExceptionHandler:
+    """
+    Базовый класс обработчика ошибок — как telebot.ExceptionHandler.
+
+    Наследник с переопределённым handle() передаётся в
+    ``MaxiBot(exception_handler=...)`` и получает каждое исключение из
+    обработчиков, middleware, func-фильтров, цикла поллинга и
+    webhook-сервера — сюда вешаются Sentry, алерты и своё логирование.
+
+    handle() возвращает True, если ошибка обработана — maxibot её больше
+    никуда не пишет; False/None — ошибка уходит в логгер 'maxibot'
+    (logger.error, traceback — на уровне DEBUG), как в telebot.
+
+    Необработанная ошибка не останавливает бот: и обработка обновлений,
+    и цикл поллинга продолжаются (как telebot.infinity_polling;
+    телеботовский polling() по умолчанию от таких ошибок падает — этого
+    режима в maxibot нет). Единственные ошибки мимо exception_handler —
+    парс-ошибки Update (payload, который парсер не понял): они только
+    логируются на уровне ERROR с traceback, а обновление уходит в общие
+    middleware с сырым json.
+    """
+
+    def handle(self, exception: Exception) -> bool:
+        return False
+
+
 class _WorkerPool:
     """
     Пул демон-потоков для выполнения обработчиков — аналог util.ThreadPool
@@ -71,8 +110,9 @@ class _WorkerPool:
     зависших или стоящих в очереди обработчиков.
     """
 
-    def __init__(self, num_threads: int):
+    def __init__(self, num_threads: int, on_error: Optional[Callable] = None):
         self._queue = queue.Queue()
+        self._on_error = on_error
         self._threads = []
         for i in range(num_threads):
             thread = threading.Thread(
@@ -89,10 +129,13 @@ class _WorkerPool:
             task, args, kwargs = self._queue.get()
             try:
                 task(*args, **kwargs)
-            except Exception:
+            except Exception as e:
                 # страховка, чтобы поток пула не умер; сами обработчики
                 # уже обёрнуты в MaxiBot._run_task
-                print(f"Error while processing update: {traceback.format_exc()}")
+                if self._on_error is not None:
+                    self._on_error(e, "Error while processing update")
+                else:
+                    logger.error("Error while processing update:\n%s", traceback.format_exc())
             finally:
                 self._queue.task_done()
 
@@ -107,7 +150,8 @@ class MaxiBot:
         parse_mode: Optional[str] = None,
         threaded: bool = True,
         skip_pending: bool = False,
-        num_threads: int = 2
+        num_threads: int = 2,
+        exception_handler: Optional[ExceptionHandler] = None
     ):
         """
         Метод инициализации бота
@@ -137,6 +181,18 @@ class MaxiBot:
         :param num_threads: Размер пула потоков для обработчиков
             (используется при threaded=True). По умолчанию 2, как в telebot
         :type num_threads: int
+
+        :param exception_handler: Обработчик ошибок — наследник
+            ExceptionHandler с методом handle(exception) -> bool, как в
+            telebot. Получает исключения обработчиков, middleware,
+            func-фильтров, цикла поллинга и webhook-сервера (кроме
+            парс-ошибок Update — те только логируются). handle()
+            вернул истину — ошибка считается обработанной и не логируется;
+            иначе — logger.error в логгер 'maxibot' и traceback на уровне
+            DEBUG. Можно назначить и позже: bot.exception_handler = ...
+            Передавайте по имени: в telebot этот параметр стоит после
+            next_step_backend и reply_backend, которых в maxibot нет
+        :type exception_handler: Optional[ExceptionHandler]
         """
         if parse_mode is not None and not isinstance(parse_mode, str):
             # второй позиционный параметр раньше был threaded: без этой проверки
@@ -154,8 +210,11 @@ class MaxiBot:
         self.skip_pending = skip_pending
         self.threaded = threaded
         self.num_threads = num_threads
+        self.exception_handler = exception_handler
         if threaded:
-            self._worker_pool = _WorkerPool(num_threads=num_threads)
+            self._worker_pool = _WorkerPool(
+                num_threads=num_threads, on_error=self._report_exception
+            )
         else:
             self._worker_pool = None
         self.handlers = {
@@ -305,7 +364,7 @@ class MaxiBot:
         Останавливает polling или webhook-сервер бота
         """
         if not self.is_running:
-            print("Bot is not running")
+            logger.info("Bot is not running")
             return None
         if self.poll:
             self.poll.stop()
@@ -321,7 +380,7 @@ class MaxiBot:
         :type allowed_updates: Optional[List[str]]
         """
         if self.is_running:
-            print("Bot is already running")
+            logger.warning("Bot is already running")
             return None
         if self.skip_pending:
             # как в telebot: пропуск накопленных обновлений выполняется один
@@ -329,7 +388,11 @@ class MaxiBot:
             self._skip_updates()
             self.skip_pending = False
         self.is_running = True
-        self.poll = Polling(api=self.api, allowed_updates=allowed_updates)
+        self.poll = Polling(
+            api=self.api,
+            allowed_updates=allowed_updates,
+            on_error=self._report_exception,
+        )
         await self.poll.loop(self._process_update)
 
     # def on(self, update_type: str):
@@ -417,10 +480,10 @@ class MaxiBot:
         это единственный поток поллинга, и долгая работа в middleware
         задержит остальные обновления; при webhook у каждого запроса свой
         поток, и middleware разных обновлений выполняются параллельно.
-        Исключение в middleware печатается, а обновление дальше не
-        обрабатывается — обработчики не вызываются (как telebot с
-        suppress_middleware_excepions=True; ронять поллинг, как telebot по
-        умолчанию, maxibot не станет).
+        Исключение в middleware уходит в exception_handler, не обработано
+        — логируется, а обновление дальше не обрабатывается — обработчики
+        не вызываются (как telebot с suppress_middleware_excepions=True;
+        ронять поллинг, как telebot по умолчанию, maxibot не станет).
 
         Пример:
 
@@ -563,8 +626,14 @@ class MaxiBot:
         elif message_filter == 'chat_types':
             return context.chat.type in filter_value
         elif message_filter == 'func':
-            # print("FUUUUUUUUUUUUUUUUUUUUUUUUNCCCCCCCCCCCCCCCCC")
-            return filter_value(context)
+            try:
+                return filter_value(context)
+            except Exception as e:
+                # ошибка func-фильтра не роняет диспатч: обработчик
+                # считается несовпавшим (в telebot такое исключение
+                # роняло поллинг)
+                self._report_exception(e, "Error in filter function")
+                return False
         return False
 
     def _check_filters(self, context, handler: Dict):
@@ -590,7 +659,10 @@ class MaxiBot:
                     try:
                         return func_filter(context)
                     except Exception as e:
-                        print(f"Error in filter function: {e}")
+                        # ошибка func-фильтра не роняет диспатч: обработчик
+                        # считается несовпавшим (в telebot такое исключение
+                        # роняло поллинг)
+                        self._report_exception(e, "Error in filter function")
                         return False
 
                 return True
@@ -659,9 +731,9 @@ class MaxiBot:
         for middleware, ctx in calls:
             try:
                 middleware(self, ctx)
-            except Exception:
+            except Exception as e:
                 name = getattr(middleware, "__qualname__", repr(middleware))
-                print(f"Error in middleware {name}, update skipped: {traceback.format_exc()}")
+                self._report_exception(e, f"Error in middleware {name}, update skipped")
                 return False
         return True
 
@@ -697,10 +769,9 @@ class MaxiBot:
                 else:
                     self._process_text_message(upd.message)
             elif upd.callback_query is not None:
-                print("Processing message_callback...")
                 self._process_callback_query(upd.callback_query)
-        except Exception:
-            print(f"Error while processing update: {traceback.format_exc()}")
+        except Exception as e:
+            self._report_exception(e, "Error while processing update")
 
     def _exec_task(self, task: Callable, *args, **kwargs):
         """
@@ -714,16 +785,51 @@ class MaxiBot:
         else:
             self._run_task(task, *args, **kwargs)
 
-    @staticmethod
-    def _run_task(task: Callable, *args, **kwargs):
+    def _run_task(self, task: Callable, *args, **kwargs):
         """
-        Вызов обработчика с перехватом ошибок: исключение в потоке пула
-        иначе молча потерялось бы внутри Future.
+        Вызов обработчика с перехватом ошибок: исключение обработчика
+        уходит в exception_handler, не обработано — в логгер, и поллинг
+        продолжается (в потоке пула ошибка иначе молча потерялась бы).
+        В telebot по умолчанию необработанная ошибка обработчика роняет
+        polling() — maxibot ведёт себя как telebot с
+        use_class_middlewares=True и infinity_polling: логирует и живёт.
         """
         try:
             task(*args, **kwargs)
+        except Exception as e:
+            self._report_exception(e, "Error in handler")
+
+    def _handle_exception(self, exception: Exception) -> bool:
+        """
+        Отдаёт исключение в exception_handler — как telebot._handle_exception.
+
+        :return: True, если обработчик назначен и вернул истину — ошибка
+            считается обработанной и дальше не логируется
+        :rtype: bool
+        """
+        if self.exception_handler is None:
+            return False
+        return self.exception_handler.handle(exception)
+
+    def _report_exception(self, exception: Exception, message: str):
+        """
+        Единая точка отчёта об ошибке: сначала exception_handler, если тот
+        не обработал (или его нет) — logger.error, traceback — на уровне
+        DEBUG (как в telebot). Сама не бросает: упавший handle()
+        логируется, а не роняет поллинг. Вызывается из except-блока —
+        traceback берётся из текущего исключения.
+
+        :param exception: Перехваченное исключение
+        :param message: Что происходило, когда оно случилось
+        """
+        try:
+            handled = self._handle_exception(exception)
         except Exception:
-            print(f"Error while processing update: {traceback.format_exc()}")
+            logger.error("Error in exception handler:\n%s", traceback.format_exc())
+            handled = False
+        if not handled:
+            logger.error("%s: %s", message, exception)
+            logger.debug("Exception traceback:\n%s", traceback.format_exc())
 
     def _resolve_parse_mode(self, parse_mode, default=None):
         """
@@ -866,13 +972,15 @@ class MaxiBot:
             )
         """
         if self.is_running:
-            print("Bot is already running")
+            logger.warning("Bot is already running")
             return
 
         if webhook_url:
             self.set_webhook(url=webhook_url, secret=secret, allowed_updates=allowed_updates)
 
-        self._webhook = WebhookServer(host=host, port=port, secret=secret)
+        self._webhook = WebhookServer(
+            host=host, port=port, secret=secret, on_error=self._report_exception
+        )
         self._webhook.start(handler=self._process_update)
         self.is_running = True
 
@@ -1590,7 +1698,7 @@ class MaxiBot:
                 self._exec_task(handler["function"], callback)
                 break
         else:
-            print("No matching handler found for callback")
+            logger.debug("No matching handler found for callback")
 
     def answer_callback_query(
         self,

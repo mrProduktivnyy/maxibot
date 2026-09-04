@@ -1,6 +1,17 @@
 # Util
-## class maxibot.__init__.MaxiBot(token)
+## class maxibot.__init__.ExceptionHandler
+Базовый класс обработчика ошибок — как `telebot.ExceptionHandler`. Наследник с методом `handle(exception) -> bool` передаётся в `MaxiBot(exception_handler=...)` и получает исключения обработчиков, middleware, func-фильтров, цикла поллинга и webhook-сервера (Sentry, алерты, своё логирование). `handle()` вернул истину — ошибка считается обработанной и никуда не пишется; False/None — уходит в логгер `maxibot`: `logger.error`, traceback на уровне DEBUG. print в stdout библиотека больше не использует. Необработанные ошибки бот не останавливают (как `infinity_polling` в telebot). Мимо exception_handler проходят только парс-ошибки Update (непонятный payload) — они логируются на ERROR с traceback, а обновление уходит в общие middleware с сырым json  
+**Методы:**
+* **handle** (`exception`) - Вызывается для каждой перехваченной ошибки; по умолчанию возвращает `False`  
+## class maxibot.__init__.MaxiBot(token, parse_mode, threaded, skip_pending, num_threads, exception_handler)
 Класс бота MAX  
+**Параметры:**
+* **token** (`str`) - Токен бота  
+* **parse_mode** (`str`) - Разметка на весь уровень бота (как в telebot)  
+* **threaded** (`bool`) - Выполнять обработчики в пуле потоков (по умолчанию True, как в telebot)  
+* **skip_pending** (`bool`) - Пропустить обновления, накопленные до запуска  
+* **num_threads** (`int`) - Размер пула потоков (по умолчанию 2, как в telebot)  
+* **exception_handler** (`ExceptionHandler`) - Обработчик ошибок с методом `handle(exception) -> bool`; передавайте по имени (в telebot перед ним стоят next_step_backend и reply_backend, которых в maxibot нет). Можно назначить и позже: `bot.exception_handler = ...`  
 **Методы:**
 * **_build_handler_dict** (`handler` `**filters`) - Метод, которая формирует словарь для добавления в список обработчиков событий (handler)  
     * **handler** - Функция-обработчик события  

@@ -1330,4 +1330,6 @@ class Update(JsonDeserializable):
             # payload, который парсер не понял (например, пост канала без
             # sender): общие middleware всё равно получат Update с сырым json,
             # а до обработчиков такое обновление не дойдёт — как и раньше
-            print(f"Error while parsing update {self.update_type}: {traceback.format_exc()}")
+            logger.error(
+                "Error while parsing update %s:\n%s", self.update_type, traceback.format_exc()
+            )

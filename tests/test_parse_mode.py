@@ -83,7 +83,8 @@ def sent(bot):
 # 1. Сигнатура и дефолты конструктора — порядок параметров как в telebot
 sig = inspect.signature(MaxiBot.__init__)
 assert list(sig.parameters) == [
-    "self", "token", "parse_mode", "threaded", "skip_pending", "num_threads"
+    "self", "token", "parse_mode", "threaded", "skip_pending", "num_threads",
+    "exception_handler",
 ], list(sig.parameters)
 assert sig.parameters["parse_mode"].default is None
 assert sig.parameters["skip_pending"].default is False
@@ -193,7 +194,7 @@ print('10 ok: edit_message_reply_markup берёт разметку бота')
 
 
 class FakePolling:
-    def __init__(self, api=None, allowed_updates=None):
+    def __init__(self, api=None, allowed_updates=None, on_error=None):
         pass
 
     async def loop(self, handler):
