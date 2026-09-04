@@ -1529,7 +1529,8 @@ class MaxiBot:
         parse_mode: Optional[str] = None,
         notify: bool = True,
         disable_web_page_preview: Optional[bool] = None,
-        reply_to_message_id: Optional[str] = None
+        reply_to_message_id: Optional[str] = None,
+        timeout: Optional[int] = None
     ) -> Message:
         """
         Отправляет ответ на текущее сообщение/обновление
@@ -1560,6 +1561,10 @@ class MaxiBot:
             link={"type": "reply", "mid": ...} в теле запроса)
         :type reply_to_message_id: Optional[str]
 
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot;
+            None (и 0, как в telebot) — модульные таймауты apihelper
+        :type timeout: Optional[int]
+
         :return: Информация об отправленном сообщении
         :rtype: Message
         """
@@ -1589,7 +1594,9 @@ class MaxiBot:
                 parse_mode=self._resolve_parse_mode(parse_mode, default="markdown"),
                 notify=notify,
                 disable_link_preview=disable_web_page_preview,
-                link=link
+                link=link,
+                # как в telebot: timeout=0 означает «без своего таймаута»
+                timeout=timeout or None
             ),
             api=self.api
         )
@@ -1643,6 +1650,464 @@ class MaxiBot:
             chat_id, _CHAT_ACTIONS.get(action, action), timeout=timeout or None
         )
         return bool(isinstance(response, dict) and response.get("success", False))
+
+    @staticmethod
+    def _resolve_reply_target(reply_to_message_id, reply_parameters, method_name):
+        """
+        Выбирает сообщение для ответа цитатой из пары телеботовских
+        параметров: как в telebot, reply_parameters важнее устаревшего
+        reply_to_message_id — при конфликте используется reply_parameters
+        и пишется предупреждение в логгер.
+        """
+        rp_message_id = None
+        if reply_parameters is not None:
+            rp_message_id = getattr(reply_parameters, "message_id", None)
+        if rp_message_id:
+            if reply_to_message_id is not None:
+                logger.warning(
+                    "%s: заданы и reply_parameters, и устаревший "
+                    "reply_to_message_id — конфликт, используется "
+                    "reply_parameters (как в telebot)",
+                    method_name,
+                )
+            return rp_message_id
+        return reply_to_message_id
+
+    def send_location(
+        self,
+        chat_id: Union[int, str],
+        latitude: float,
+        longitude: float,
+        live_period: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_notification: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        horizontal_accuracy: Optional[float] = None,
+        heading: Optional[int] = None,
+        proximity_alert_radius: Optional[int] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет точку на карте. Сигнатура один в один с
+        telebot.send_location; в MAX это обычный POST /messages со
+        вложением {"type": "location", "latitude": ..., "longitude": ...}
+        (координаты лежат на верхнем уровне вложения, payload у него нет).
+
+        Live-локаций в MAX нет: live_period при передаче игнорируется
+        с предупреждением в логгере, пин статичен. horizontal_accuracy,
+        heading, proximity_alert_radius, allow_sending_without_reply,
+        protect_content и message_thread_id принимаются для совместимости
+        и игнорируются — таких настроек в MAX нет.
+
+        У возвращаемого Message заполняются базовые поля (message_id,
+        chat, content_type "location"), но атрибут location остаётся
+        None — телеботовский паттерн result.location.latitude не
+        работает, координаты и так известны вызывающему.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param latitude: Широта
+        :type latitude: float
+
+        :param longitude: Долгота
+        :type longitude: float
+
+        :param live_period: Игнорируется (live-локаций в MAX нет)
+        :type live_period: Optional[int]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Клавиатура (уйдёт вторым вложением)
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param disable_notification: True — отправить без звука (в MAX это
+            notify=false)
+        :type disable_notification: Optional[bool]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id;
+            остальные его поля игнорируются
+        :type reply_parameters: Optional[Any]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        if live_period is not None:
+            logger.warning(
+                "send_location: live-локаций в MAX нет — live_period "
+                "игнорируется, пин статичен"
+            )
+        reply_to_message_id = self._resolve_reply_target(
+            reply_to_message_id, reply_parameters, "send_location"
+        )
+        return self.send_message(
+            chat_id,
+            None,
+            attachments=[{
+                "type": "location",
+                "latitude": latitude,
+                "longitude": longitude,
+            }],
+            reply_markup=reply_markup,
+            notify=not disable_notification,
+            reply_to_message_id=reply_to_message_id,
+            timeout=timeout,
+        )
+
+    def send_contact(
+        self,
+        chat_id: Union[int, str],
+        phone_number: str,
+        first_name: str,
+        last_name: Optional[str] = None,
+        vcard: Optional[str] = None,
+        disable_notification: Optional[bool] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        timeout: Optional[int] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет карточку контакта. Сигнатура один в один с
+        telebot.send_contact; в MAX это POST /messages со вложением
+        {"type": "contact", "payload": {name, vcf_phone[, vcf_info]}}:
+        name собирается из first_name/last_name, phone_number уходит в
+        vcf_phone, переданный vcard — как есть в vcf_info.
+
+        По документации MAX контакт обязан быть ЕДИНСТВЕННЫМ вложением
+        сообщения, поэтому переданный reply_markup игнорируется
+        с предупреждением в логгере (в telebot клавиатуру к контакту
+        приложить можно) — отправьте её отдельным сообщением.
+        allow_sending_without_reply, protect_content и message_thread_id
+        принимаются для совместимости и игнорируются. У возвращаемого
+        Message content_type — "contact", но атрибут contact остаётся
+        None (данные контакта и так известны вызывающему).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param phone_number: Телефон контакта
+        :type phone_number: str
+
+        :param first_name: Имя контакта
+        :type first_name: str
+
+        :param last_name: Фамилия контакта (склеивается с именем в
+            payload.name)
+        :type last_name: Optional[str]
+
+        :param vcard: Визитка в формате vCard — уходит в vcf_info как есть
+        :type vcard: Optional[str]
+
+        :param disable_notification: True — отправить без звука
+        :type disable_notification: Optional[bool]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Игнорируется — контакт в MAX обязан быть
+            единственным вложением
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id
+        :type reply_parameters: Optional[Any]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        if reply_markup is not None:
+            logger.warning(
+                "send_contact: по документации MAX контакт обязан быть "
+                "единственным вложением сообщения — reply_markup "
+                "игнорируется, отправьте клавиатуру отдельным сообщением"
+            )
+        reply_to_message_id = self._resolve_reply_target(
+            reply_to_message_id, reply_parameters, "send_contact"
+        )
+        name = f"{first_name} {last_name}" if last_name else first_name
+        payload = {"name": name, "vcf_phone": phone_number}
+        if vcard:
+            payload["vcf_info"] = vcard
+        return self.send_message(
+            chat_id,
+            None,
+            attachments=[{"type": "contact", "payload": payload}],
+            notify=not disable_notification,
+            reply_to_message_id=reply_to_message_id,
+            timeout=timeout,
+        )
+
+    def send_venue(
+        self,
+        chat_id: Union[int, str],
+        latitude: Optional[float],
+        longitude: Optional[float],
+        title: str,
+        address: str,
+        foursquare_id: Optional[str] = None,
+        foursquare_type: Optional[str] = None,
+        disable_notification: Optional[bool] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        timeout: Optional[int] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        google_place_id: Optional[str] = None,
+        google_place_type: Optional[str] = None,
+        protect_content: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет место (венью). Сигнатура один в один с
+        telebot.send_venue. Отдельного типа венью в MAX нет — честная
+        эмуляция одним сообщением: location-вложение с координатами
+        плюс текст «title\\naddress» (без разметки, как в telebot).
+
+        foursquare_id/foursquare_type/google_place_id/google_place_type
+        принимаются для совместимости и игнорируются — привязки к
+        справочникам мест в MAX нет; allow_sending_without_reply,
+        protect_content и message_thread_id — тоже. У возвращаемого
+        Message content_type — "location" (не "venue"), атрибуты venue
+        и location остаются None.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param latitude: Широта
+        :type latitude: Optional[float]
+
+        :param longitude: Долгота
+        :type longitude: Optional[float]
+
+        :param title: Название места (первая строка текста)
+        :type title: str
+
+        :param address: Адрес места (вторая строка текста)
+        :type address: str
+
+        :param disable_notification: True — отправить без звука
+        :type disable_notification: Optional[bool]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Клавиатура (уйдёт вторым вложением)
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id
+        :type reply_parameters: Optional[Any]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        reply_to_message_id = self._resolve_reply_target(
+            reply_to_message_id, reply_parameters, "send_venue"
+        )
+        return self.send_message(
+            chat_id,
+            f"{title}\n{address}",
+            attachments=[{
+                "type": "location",
+                "latitude": latitude,
+                "longitude": longitude,
+            }],
+            reply_markup=reply_markup,
+            # название и адрес — сырой текст без разметки, как в telebot
+            parse_mode="",
+            notify=not disable_notification,
+            reply_to_message_id=reply_to_message_id,
+            timeout=timeout,
+        )
+
+    def edit_message_live_location(
+        self,
+        latitude: float,
+        longitude: float,
+        chat_id: Optional[Union[int, str]] = None,
+        message_id: Optional[str] = None,
+        inline_message_id: Optional[str] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        timeout: Optional[int] = None,
+        horizontal_accuracy: Optional[float] = None,
+        heading: Optional[int] = None,
+        proximity_alert_radius: Optional[int] = None,
+    ) -> Message:
+        """
+        Передвигает пин сообщения-локации: PUT /messages заменяет тело
+        сообщения новым location-вложением (плюс reply_markup, если
+        передана). Сигнатура как в telebot.edit_message_live_location,
+        но семантики live-локации в MAX нет — редактировать можно любое
+        сообщение-локацию, а не только «живое», и пин просто переезжает
+        при каждом вызове.
+
+        PUT /messages заменяет тело целиком, поэтому текст у сообщения
+        (если был) пропадёт — у сообщений send_location его нет.
+        Участники не получают «Сообщение было изменено» (notify=false) —
+        переезжающий по таймеру пин не шумит в чате. message_id
+        обязателен: инлайн-сообщений в MAX нет, вызов с одним
+        inline_message_id даёт ValueError. horizontal_accuracy, heading
+        и proximity_alert_radius принимаются для совместимости и
+        игнорируются.
+
+        :param latitude: Новая широта
+        :type latitude: float
+
+        :param longitude: Новая долгота
+        :type longitude: float
+
+        :param chat_id: Идентификатор чата (используется только для
+            сборки возвращаемого Message — сообщение в MAX адресуется
+            одним message_id; без chat_id у возвращаемого Message не
+            будет данных чата)
+        :type chat_id: Optional[Union[int, str]]
+
+        :param message_id: Идентификатор сообщения-локации (обязателен)
+        :type message_id: Optional[str]
+
+        :param reply_markup: Клавиатура (уйдёт вторым вложением)
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :return: Message с новыми вложениями при успехе, иначе {} (как
+            edit_message_media)
+        :rtype: Message | {}
+        """
+        if message_id is None:
+            raise ValueError(
+                "edit_message_live_location: инлайн-сообщений в MAX нет — "
+                "передайте message_id"
+            )
+        final_attachments = [{
+            "type": "location",
+            "latitude": latitude,
+            "longitude": longitude,
+        }]
+        if reply_markup:
+            if hasattr(reply_markup, 'to_attachment'):
+                final_attachments.append(reply_markup.to_attachment())
+            else:
+                final_attachments.append(reply_markup)
+
+        response = self.api.send_message(
+            msg_id=message_id,
+            method="PUT",
+            attachments=final_attachments,
+            # без «Сообщение было изменено» участникам — пин, который
+            # переезжает по таймеру, иначе шумел бы на каждый вызов
+            notify=False,
+            timeout=timeout or None,
+        )
+
+        if isinstance(response, dict) and response.get("success"):
+            timestamp = int(time.time() * 1000)
+            message_data = get_edit_message_data(None, chat_id, message_id, final_attachments, timestamp)
+            return Message(update=message_data, api=self.api)
+
+        return {}
+
+    def stop_message_live_location(
+        self,
+        chat_id: Optional[Union[int, str]] = None,
+        message_id: Optional[str] = None,
+        inline_message_id: Optional[str] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        timeout: Optional[int] = None,
+    ) -> Message:
+        """
+        Заглушка для совместимости с telebot.stop_message_live_location:
+        live-локаций в MAX нет, останавливать нечего, пин и так статичен.
+        Без reply_markup ничего не отправляет и возвращает сообщение как
+        есть. Если передана reply_markup — заменяет клавиатуру сообщения
+        (как делает telebot при остановке), сохраняя его текст и остальные
+        вложения; участники не получают «Сообщение было изменено»
+        (notify=false). message_id обязателен: инлайн-сообщений в MAX
+        нет, вызов с одним inline_message_id даёт ValueError.
+
+        :param chat_id: Идентификатор чата (используется только для
+            сборки возвращаемого Message при замене клавиатуры)
+        :type chat_id: Optional[Union[int, str]]
+
+        :param message_id: Идентификатор сообщения-локации (обязателен)
+        :type message_id: Optional[str]
+
+        :param reply_markup: Новая клавиатура сообщения
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :return: Сообщение; при передаче reply_markup — Message с новыми
+            вложениями при успехе, иначе {} (как edit_message_media)
+        :rtype: Message | {}
+        """
+        if message_id is None:
+            raise ValueError(
+                "stop_message_live_location: инлайн-сообщений в MAX нет — "
+                "передайте message_id"
+            )
+        if reply_markup is None:
+            return self.get_message(message_id=message_id)
+
+        # заменить только клавиатуру: PUT /messages перезаписывает тело
+        # целиком, поэтому текст и остальные вложения надо переотправить
+        info = self.api.get_message(msg_id=message_id)
+        body = {}
+        if isinstance(info, dict):
+            body = (info.get("message") or info).get("body") or {}
+        final_attachments = [
+            attachment for attachment in body.get("attachments") or []
+            if attachment.get("type") != "inline_keyboard"
+        ]
+        if hasattr(reply_markup, 'to_attachment'):
+            final_attachments.append(reply_markup.to_attachment())
+        else:
+            final_attachments.append(reply_markup)
+
+        response = self.api.send_message(
+            msg_id=message_id,
+            method="PUT",
+            text=body.get("text"),
+            # None: не навешивать разметку на уже отправленный текст
+            parse_mode=None,
+            attachments=final_attachments,
+            # смена клавиатуры — не повод для «Сообщение было изменено»
+            notify=False,
+            timeout=timeout or None,
+        )
+
+        if isinstance(response, dict) and response.get("success"):
+            timestamp = int(time.time() * 1000)
+            message_data = get_edit_message_data(
+                body.get("text"), chat_id, message_id, final_attachments, timestamp
+            )
+            return Message(update=message_data, api=self.api)
+
+        return {}
 
     def reply_to(self, message: Message, text: str, **kwargs) -> Message:
         """

@@ -723,6 +723,10 @@ class Chat(JsonDeserializable):
         :param chat_id: айди чата
         :type chat_id: Dict[str, Any]
         """
+        if chat_id is None:
+            # синтетическое сообщение без chat_id (например, результат PUT,
+            # когда вызывающий его не передал) — не ходить в GET /chats/None
+            return None
         info = self.api.get_chat_info(chat_id=chat_id)
         return info.get("title")
 

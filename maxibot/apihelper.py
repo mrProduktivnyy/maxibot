@@ -100,7 +100,8 @@ class Api:
         parse_mode: str = "markdown",
         notify: bool = True,
         disable_link_preview: Optional[bool] = None,
-        link: Optional[Dict[str, Any]] = None
+        link: Optional[Dict[str, Any]] = None,
+        timeout=None
     ) -> Dict[str, Any]:
         """
         Отправляет/удаляет/обновляет сообщение в чате
@@ -125,10 +126,14 @@ class Api:
             None — обычное сообщение без ссылки
         :type link: Optional[Dict[str, Any]]
 
+        :param timeout: Таймаут HTTP-запроса в секундах на этот вызов;
+            None — модульные CONNECT_TIMEOUT/READ_TIMEOUT
+
         :return: Информация об отправленном сообщении
         :rtype: Dict[str, Any]
         """
         # query параметры запроса
+        params = {}
         if chat_id:
             params = {"chat_id": chat_id}
         elif msg_id and method in ("DELETE", "PUT"):
@@ -151,13 +156,15 @@ class Api:
         if text and parse_mode:
             data["format"] = parse_mode
 
-        if notify:
-            data["notify"] = notify
+        # notify=False должен уйти в тело явно: NewMessageBody.notify имеет
+        # серверный default true, и пропуск поля НЕ отключает уведомление
+        if notify is not None:
+            data["notify"] = bool(notify)
 
         if link:
             data["link"] = link
 
-        return self.client.request(method, "/messages", params=params, data=data)
+        return self.client.request(method, "/messages", params=params, data=data, timeout=timeout)
 
     def get_upload_file_url(self, type_attach: str):
         """

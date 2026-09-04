@@ -40,14 +40,15 @@ TLS: библиотека ходит на актуальный `https://platform
     * `chat_id` - Уникальный идентификатор чата  
     * `action` - Действие MAX (enum SenderAction): `typing_on`, `sending_photo`, `sending_video`, `sending_audio`, `sending_file`  
     * `timeout` - Таймаут запроса в секундах на этот вызов  
-* **send_message** (`chat_id`, `msg_id`, `text`, `method`, `attachments`, `parse_mode`, `notify`) - Отправка/удаление/обновление сообщение в чате  
+* **send_message** (`chat_id`, `msg_id`, `text`, `method`, `attachments`, `parse_mode`, `notify`, `disable_link_preview`, `link`, `timeout`) - Отправка/удаление/обновление сообщение в чате  
     * `chat_id` - Уникальный идентификатор чата  
     * `msg_id` - Уникальный идентификатор сообщения  
     * `text` - Текст сообщения  
     * `method` - HTTP метод для запроса  
     * `attachments` - Вложения сообщения  
     * `parse_mode` - Формат текста сообщения (`Markdown`, `HTML`)  
-    * `notify` - Флаг необходимости звукового уведомления  
+    * `notify` - Флаг звукового уведомления; False уходит в тело явно (у NewMessageBody.notify серверный default true, пропуск поля звук не отключает)  
+    * `timeout` - Таймаут HTTP-запроса в секундах на этот вызов; None — модульные CONNECT_TIMEOUT/READ_TIMEOUT  
 * **answer_callback**(`callback_id`,`text`,`notification`, `attachments`, `link`, `notify`, `format`)  
     * `callback_id` - Уникальный идентификатор callback-запроса
     * `text` - Новый текст сообщения. Если указан, сообщение будет обновлено  

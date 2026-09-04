@@ -89,14 +89,28 @@
     * **attachments** - Вложения сообщения  
     * **reply_markup** - Объект клавиатуры  
     * **parse_mode** - Формат сообщения  
-    * **notify** - Флаг звукового уведомления отправки сообщения  
+    * **notify** - Флаг звукового уведомления отправки сообщения (False теперь явно уходит в MAX и реально отключает звук)  
     * **disable_web_page_preview** - Отключить предпросмотр ссылок  
     * **reply_to_message_id** - Идентификатор сообщения, на которое бот ответит цитатой  
+    * **timeout** - Таймаут HTTP-запроса в секундах, как в telebot (0 — «без своего», модульные таймауты apihelper)  
 * **send_chat_action** (`chat_id`, `action`, `timeout`, `message_thread_id`) - Отправляет действие бота в чат: индикатор «печатает…», «отправляет фото» и т.п. Сигнатура как в telebot; индикатор живёт несколько секунд, для долгих операций вызов повторяют. Возвращает True при успехе и False, если MAX ответил `success: false` (telebot в этой ситуации бросает ApiTelegramException — при переносе проверяйте возврат); HTTP-ошибки бросают MaxApiHTTPException  
     * **chat_id** - Чат, куда надо отправить действие  
     * **action** - Имя telebot (`typing`, `upload_photo`, `record_video`, `upload_video`, `record_voice`, `upload_voice`, `record_audio`, `upload_audio`, `upload_document`, `record_video_note`, `upload_video_note`) мапится в действия MAX; `choose_sticker` и `find_location` уходят как `typing_on` — своих индикаторов в MAX нет; родные имена MAX (`typing_on`, `sending_photo`, `sending_video`, `sending_audio`, `sending_file`) проходят как есть  
     * **timeout** - Таймаут запроса в секундах  
     * **message_thread_id** - Принимается для совместимости с telebot и игнорируется — тредов в MAX нет  
+* **send_location** (`chat_id`, `latitude`, `longitude`, `live_period`, `reply_to_message_id`, `reply_markup`, `disable_notification`, `timeout`, …) - Отправляет точку на карте: вложение `{"type": "location", "latitude", "longitude"}` (координаты на верхнем уровне вложения, payload у него нет). Сигнатура как в telebot  
+    * **live_period** - Игнорируется с предупреждением — live-локаций в MAX нет, пин статичен  
+    * **reply_markup** - Клавиатура вторым вложением  
+    * **disable_notification** - True — без звука (notify=false)  
+    * **reply_parameters** - Если передан объект с message_id — используется вместо reply_to_message_id (при конфликте предупреждение, как в telebot); horizontal_accuracy/heading/proximity_alert_radius/allow_sending_without_reply/protect_content/message_thread_id принимаются и игнорируются. У возвращаемого Message атрибут location остаётся None (координаты и так известны вызывающему)  
+* **send_contact** (`chat_id`, `phone_number`, `first_name`, `last_name`, `vcard`, `disable_notification`, `reply_to_message_id`, `reply_markup`, `timeout`, …) - Отправляет карточку контакта: вложение `{"type": "contact", "payload": {name, vcf_phone[, vcf_info]}}`. Сигнатура как в telebot  
+    * **first_name/last_name** - Склеиваются в payload.name  
+    * **phone_number** - Уходит в vcf_phone  
+    * **vcard** - Как есть в vcf_info  
+    * **reply_markup** - Игнорируется с предупреждением: по документации MAX контакт обязан быть единственным вложением сообщения — клавиатуру шлите отдельным сообщением (отличие от telebot)  
+* **send_venue** (`chat_id`, `latitude`, `longitude`, `title`, `address`, …) - Отправляет место. Отдельного типа венью в MAX нет — эмуляция одним сообщением: location-вложение + текст «title\naddress» без разметки (как в telebot). foursquare_*/google_place_* принимаются и игнорируются; reply_markup разрешена. content_type возвращаемого Message — 'location' (не 'venue'), атрибуты venue/location остаются None  
+* **edit_message_live_location** (`latitude`, `longitude`, `chat_id`, `message_id`, `inline_message_id`, `reply_markup`, `timeout`, …) - Передвигает пин сообщения-локации: PUT /messages с новым location-вложением, без уведомления участников (notify=false). Семантики live-локаций в MAX нет — редактируется любое сообщение-локация, пин просто переезжает; PUT заменяет тело целиком, текст сообщения (если был) пропадёт. message_id обязателен (инлайн-сообщений в MAX нет — с одним inline_message_id будет ValueError). Возвращает Message при успехе, иначе {}  
+* **stop_message_live_location** (`chat_id`, `message_id`, `inline_message_id`, `reply_markup`, `timeout`) - Заглушка совместимости: live-локаций в MAX нет, останавливать нечего. Без reply_markup возвращает сообщение как есть; с reply_markup — заменяет клавиатуру сообщения без уведомления участников, сохраняя его текст и остальные вложения. message_id обязателен  
 * **get_message** (`message_id`) - Метод получения сообщения по айди  
     * **message_id** - Идентификатор сообщения, которое надо получить  
 * **callback_query_handler** (`data` `**kwargs`) - Декоратор для регистрации обработчиков callback-запросов от inline-кнопок  
