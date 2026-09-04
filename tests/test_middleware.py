@@ -363,7 +363,9 @@ def on_start(message):
     seen_start.append(("start", message.update_type, getattr(message, "user_profile", None)))
 
 
-@bot.message_handler(func=lambda m: True)
+# хендлер без content_types получает только text (дефолт telebot);
+# bot_added ловится явной подпиской content_types=['bot_added']
+@bot.message_handler(func=lambda m: True, content_types=["text", "bot_added"])
 def on_any(message):
     seen_start.append(("any", message.update_type, getattr(message, "user_profile", None)))
 

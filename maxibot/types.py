@@ -921,12 +921,51 @@ class Message(JsonDeserializable):
     """
     Класс для работы с сообщениями (аналог telebot.types.Message)
 
+    Все атрибуты telebot.types.Message существуют и по умолчанию равны
+    None — код, переехавший с telebot, не падает с AttributeError.
+    Отличие от telebot: у медиа-сообщений текст доступен и в text,
+    и в caption (в telebot text у медиа пуст)
+
     :param update: Обновление от MAX API
     :type update: Dict[str, Any]
 
     :param api: Объект API
     :type api: Api
     """
+
+    # атрибуты telebot.types.Message 4.15.4 (включая устаревшие forward_*) —
+    # выставляются в None до заполнения реальных полей
+    _TELEBOT_ATTRIBUTES = (
+        "content_type", "id", "message_id", "from_user", "date", "chat",
+        "sender_chat", "is_automatic_forward", "reply_to_message", "via_bot",
+        "edit_date", "has_protected_content", "media_group_id",
+        "author_signature", "text", "entities", "caption_entities", "audio",
+        "document", "photo", "sticker", "video", "video_note", "voice",
+        "caption", "contact", "location", "venue", "animation", "dice",
+        "new_chat_members", "left_chat_member", "new_chat_title",
+        "new_chat_photo", "delete_chat_photo", "group_chat_created",
+        "supergroup_chat_created", "channel_chat_created",
+        "migrate_to_chat_id", "migrate_from_chat_id", "pinned_message",
+        "invoice", "successful_payment", "connected_website", "reply_markup",
+        "message_thread_id", "is_topic_message", "forum_topic_created",
+        "forum_topic_closed", "forum_topic_reopened", "has_media_spoiler",
+        "forum_topic_edited", "general_forum_topic_hidden",
+        "general_forum_topic_unhidden", "write_access_allowed",
+        "users_shared", "chat_shared", "story", "external_reply", "quote",
+        "link_preview_options", "giveaway_created", "giveaway",
+        "giveaway_winners", "giveaway_completed", "forward_origin",
+        "forward_from", "forward_from_chat", "forward_from_message_id",
+        "forward_signature", "forward_sender_name", "forward_date",
+        "user_shared", "new_chat_member",
+    )
+
+    # маппинг типов вложений MAX -> content_type telebot
+    _CONTENT_TYPE_MAP = {
+        "image": "photo",
+        "file": "document",
+    }
+    # вложения-оформление: не определяют тип контента сообщения
+    _SERVICE_ATTACHMENTS = ("inline_keyboard", "share")
 
     @staticmethod
     def _get_photo_from_attachments(update: Dict[str, Any]) -> Optional[ImageAttachment]:
@@ -962,14 +1001,14 @@ class Message(JsonDeserializable):
         :rtype: str
         """
         try:
-            if update.get("message").get("body").get("attachments"):
-                c_type = update.get("message").get("body").get("attachments")[0].get("type")
-                if c_type == "image":
-                    return "photo"
-                else:
-                    return c_type
-            else:
-                return "text"
+            attachments = update.get("message").get("body").get("attachments")
+            for attach in attachments or ():
+                a_type = attach.get("type")
+                if a_type in Message._SERVICE_ATTACHMENTS:
+                    # клавиатура/превью ссылки не делают сообщение медиа
+                    continue
+                return Message._CONTENT_TYPE_MAP.get(a_type, a_type)
+            return "text"
         except Exception:
             if update.get("update_type") == UpdateType.BOT_ADDED:
                 return UpdateType.BOT_ADDED
@@ -1042,19 +1081,47 @@ class Message(JsonDeserializable):
         if not isinstance(update, dict):
             return None
         else:
+            # сначала все атрибуты telebot по умолчанию None, реальные
+            # значения перекрывают их ниже
+            for attribute in self._TELEBOT_ATTRIBUTES:
+                setattr(self, attribute, None)
             self.update = update
             self.api = api
+            self.json: Dict[str, Any] = update.get("message") or update
             self.content_type: str = self._get_content_type(update=update)
             self.id: Optional[str] = self._get_msg_id(update=update)
             self.message_id: Optional[str] = self._get_msg_id(update=update)
             self.from_user: Optional[User] = User(update=update)
             self.date: Optional[datetime] = self._get_msg_timestamp(update=update)
             self.chat: Chat = Chat(update=update, api=api)
-            self.reply_to_message: Link = Link(link=update.get("message", {}).get("link", None))
+            link = update.get("message", {}).get("link")
+            if link:
+                # без link остаётся None из дефолтов — телеботовский
+                # `if message.reply_to_message:` работает как ожидается
+                self.reply_to_message: Link = Link(link=link)
             self.text: Optional[str] = self._get_msg_text(update=update)
             self.photo: Optional[ImageAttachment] = self._get_photo_from_attachments(update=update)
             self.photo_reply: Photo = Photo(update=update)
             self.update_type = update.get('update_type')
+            if self.content_type != "text" and self.text:
+                # у медиа-сообщений подпись доступна и как caption;
+                # text тоже остаётся заполненным (отличие от telebot)
+                self.caption: Optional[str] = self.text
+
+    @property
+    def html_text(self) -> Optional[str]:
+        """
+        Текст как в telebot.html_text; entities в MAX нет, поэтому это
+        просто text (в telebot без entities поведение то же)
+        """
+        return self.text
+
+    @property
+    def html_caption(self) -> Optional[str]:
+        """
+        Подпись как в telebot.html_caption; entities в MAX нет
+        """
+        return self.caption
 
     # def reply(self, text: str, **kwargs) -> Dict[str, Any]:
     #     """

@@ -3,16 +3,21 @@
 Объект, представляющий сообщение  
 MAX API документация: https://dev.max.ru/docs-api/objects/Message  
 **Параметры:**
-* **content_type** (`str`) - тип сообщения
+* **content_type** (`str`) - тип сообщения по именам telebot: `text`, `photo`, `video`, `audio`, `document`, `sticker`, `location`, `contact`; клавиатура и share-превью тип не определяют
 * **message_id** (`str`) - Уникальный ID сообщения
 * **from_user** (`maxibot.types.User`) - Пользователь, отправивший сообщение  
 * **date** (`datetime`) - Время создания сообщения  
 * **chat** (`maxibot.types.Chat`) - Объект чата, в котором отправлено сообщение  
-* **reply_to_message** (`maxibot.types.Link`) - Опционально содержит сообщение, на которое ответили  
+* **reply_to_message** (`maxibot.types.Link`) - Сообщение, на которое ответили; None, если это не ответ  
 * **text** (`str`) - Текст сообщения  
+* **caption** (`str`) - Подпись медиа-сообщения (у медиа text тоже заполнен — отличие от telebot)  
+* **json** (`dict`) - Сырой dict сообщения из обновления MAX  
 * **photo** (`ImageAttachment`) - Опционально. Содержит вложения фото.  
 * **photo_reply** (`Photo`) - Опциолнально. Вложения фото из сообщения, на которое ответили  
 * **update_type** (`str`) - Тип события, произошедшего в чате  
+* **html_text / html_caption** (`str`) - Как в telebot; entities в MAX нет — просто текст/подпись  
+
+Все остальные атрибуты `telebot.types.Message` (`sticker`, `venue`, `media_group_id`, `forward_from`, ...) существуют и равны `None` — код, переехавший с telebot, не падает с AttributeError.  
 ## class maxibot.types.CallbackQuery(update: Dict[str, Any], api: Api)
 Объект, представляющий входящий запрос нажатия кнопки на inline-клавитуре  
 MAX API документация https://dev.max.ru/docs-api/objects/Update  

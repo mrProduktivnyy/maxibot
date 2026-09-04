@@ -357,14 +357,33 @@ class MaxiBot:
         :param pattern: Шаблон текста (точное совпадение или регулярное выражение)
         :type pattern: str
         """
+        if content_types is None:
+            # как в telebot: без явных content_types обработчик получает
+            # только текстовые сообщения
+            content_types = ["text"]
+        elif isinstance(content_types, str):
+            logger.warning("content_types должен быть списком, обернул строку")
+            content_types = [content_types]
+        renamed = {name: telebot_name for name, telebot_name
+                   in Message._CONTENT_TYPE_MAP.items() if name in content_types}
+        if renamed:
+            # сырые имена вложений MAX из старых ботов ('file', 'image')
+            logger.warning("content_types: используйте имена telebot: %s", renamed)
+            content_types = [Message._CONTENT_TYPE_MAP.get(name, name) for name in content_types]
+        if isinstance(commands, str):
+            logger.warning("commands должен быть списком, обернул строку")
+            commands = [commands]
+
         def decorator(funcs: HandlerFunc):
+            # порядок фильтров = порядок проверки; как в telebot, content_types
+            # раньше commands/regexp/func — func не видит не-текстовые сообщения
             handler_dict = self._build_handler_dict(
                 funcs,
+                chat_types=chat_types,
+                content_types=content_types,
                 commands=commands,
                 regexp=regexp,
-                func=func,
-                content_types=content_types,
-                chat_types=chat_types
+                func=func
             )
             self.message_handlers.append(handler_dict)
             return funcs
@@ -384,8 +403,10 @@ class MaxiBot:
         типов (message_removed, bot_stopped, user_added...) своего объекта
         нет — придёт Update целиком, сырой payload в update.json. Как в
         telebot, middleware для message_created получает каждое сообщение,
-        которое дойдёт до обработчиков сообщений: в MAX это и bot_started
-        (кнопка «Начать» приходит как /start), и bot_added. Без
+        которое пойдёт в пайплайн обработчиков: в MAX это и bot_started
+        (кнопка «Начать» приходит как /start), и bot_added (до самих
+        обработчиков bot_added дойдёт только при явной подписке
+        content_types=['bot_added'] — по умолчанию они ловят text). Без
         update_types middleware вызывается для всех обновлений и получает
         Update. Обработчики получают те же объекты, поэтому атрибуты,
         выставленные в middleware, видны в обработчике.
@@ -535,9 +556,10 @@ class MaxiBot:
         if message_filter == 'content_types':
             return context.content_type in filter_value
         if message_filter == 'regexp':
-            return re.search(filter_value, text, re.IGNORECASE)
+            # как в telebot: regexp и commands применимы только к тексту
+            return context.content_type == 'text' and text and re.search(filter_value, text, re.IGNORECASE)
         elif message_filter == 'commands':
-            return extract_command(text) in filter_value
+            return context.content_type == 'text' and extract_command(text) in filter_value
         elif message_filter == 'chat_types':
             return context.chat.type in filter_value
         elif message_filter == 'func':
@@ -552,6 +574,10 @@ class MaxiBot:
         :param context: Сообщение
         :type context: Context
         """
+        if not handler['filters']:
+            # без фильтров обработчик матчит всё (как в telebot); у
+            # message_handler при этом всегда есть content_types=['text']
+            return True
         if handler['filters']:
             if isinstance(context, CallbackQuery):
                 # Сначала проверяем фильтр по data
