@@ -1,4 +1,29 @@
 # ApiHelper
+## Модульные настройки
+Аналог настроек `telebot.apihelper` — задаются на модуле и читаются на каждый запрос, менять можно на лету:
+```python
+from maxibot import apihelper
+
+apihelper.proxy = {"https": "socks5://127.0.0.1:9050"}  # прокси (по умолчанию None)
+apihelper.API_URL = None             # свой базовый URL (по умолчанию https://platform-api2.max.ru)
+apihelper.CA_BUNDLE = None           # None — certifi + встроенные сертификаты Минцифры;
+                                     # путь к своему PEM; False — отключить TLS-проверку
+apihelper.CONNECT_TIMEOUT = 15       # секунд на установку соединения
+apihelper.READ_TIMEOUT = 30          # секунд на чтение ответа (для long polling поднимается автоматически)
+apihelper.LONG_POLLING_TIMEOUT = 30  # секунд серверного удержания GET /updates
+apihelper.SESSION_TIME_TO_LIVE = 600 # жизнь requests.Session; None — вечно, 0 — новая на каждый запрос
+apihelper.session = None             # своя requests.Session (свой CA-бандл, verify и т.п.)
+apihelper.RETRY_ON_ERROR = False     # повторять запросы при сетевых ошибках
+apihelper.MAX_RETRIES = 15           # всего попыток при RETRY_ON_ERROR
+apihelper.RETRY_TIMEOUT = 2          # пауза между повторами, секунд
+apihelper.RETRY_ENGINE = 1           # 1 — повторы с паузой (как telebot), 2 — urllib3 Retry
+apihelper.ignore_warnings = False    # глушить предупреждения urllib3 (нужно только при verify=False)
+apihelper.ENABLE_MIDDLEWARE = True   # включить регистрацию bot.middleware_handler
+```
+TLS: библиотека ходит на актуальный `https://platform-api2.max.ru` (прежние `botapi.max.ru` и `platform-api.max.ru` отключены при миграциях 2026 года). Цепочка домена подписана сертификатами Минцифры («Russian Trusted Root CA»), которых нет в certifi, поэтому проверка идёт по собственному бандлу: certifi + встроенные сертификаты Минцифры (источник — [gosuslugi.ru/crt](https://www.gosuslugi.ru/crt), подробности в [cert.md](cert.md)). Свой бандл — `apihelper.CA_BUNDLE = "/путь/к/ca.pem"`; отключить проверку (не рекомендуется) — `CA_BUNDLE = False` + `ignore_warnings = True`.
+
+Прокси: при `proxy = None` применяются прокси из переменных окружения `HTTP_PROXY`/`HTTPS_PROXY` — стандартное поведение requests и telebot (раньше maxibot их игнорировал). Отключить: `apihelper.proxy = {"http": "", "https": ""}` или переменная `NO_PROXY=platform-api2.max.ru`.
+
 ## class maxibot.apihelper.Api(token)
 Клиент для рабты с api MAX  
 **Параметры:**

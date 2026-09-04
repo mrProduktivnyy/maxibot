@@ -251,8 +251,8 @@ class MaxiBot:
         :type skip_pending: Optional[bool]
 
         :param long_polling_timeout: Принимается для совместимости с telebot
-            и игнорируется — длительность long polling задаёт сервер MAX
-            (по умолчанию 30 секунд)
+            и игнорируется — длительность long polling задаёт настройка
+            apihelper.LONG_POLLING_TIMEOUT (по умолчанию 30 секунд)
         :type long_polling_timeout: Optional[int]
 
         :param logger_level: Уровень логирования ошибок цикла (значения из

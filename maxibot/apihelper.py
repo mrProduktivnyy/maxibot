@@ -4,8 +4,35 @@ from typing import Dict, Any, List, Optional
 from maxibot.core.network.client import Client
 
 
-proxy = None
-ignore_warnings = True
+# Модульные настройки сетевого слоя — аналог одноимённых в telebot.apihelper;
+# proxy, URL, таймауты и ретраи читаются на каждый запрос — их можно менять
+# на лету. Если proxy = None, применяются прокси из переменных окружения
+# HTTP(S)_PROXY (стандарт requests); отключить их: proxy = {"http": "", "https": ""}
+proxy = None            # прокси для requests, например {"https": "socks5://127.0.0.1:9050"}
+session = None          # своя requests.Session (например, со своим CA-бандлом — см. docs/cert.md);
+                        # применяется при создании сессии потока, к уже созданным — после reset/TTL
+
+API_URL = None          # переопределение базового URL API (по умолчанию Client.BASE_URL)
+CA_BUNDLE = None        # None — certifi + встроенные сертификаты Минцифры;
+                        # путь к своему PEM-бандлу; False — отключить TLS-проверку
+
+CONNECT_TIMEOUT = 15    # секунд на установку соединения
+READ_TIMEOUT = 30       # секунд на чтение ответа; для long polling поднимается автоматически
+
+LONG_POLLING_TIMEOUT = 30  # секунд серверного удержания GET /updates (дефолт сервера MAX — 30)
+
+SESSION_TIME_TO_LIVE = 600  # жизнь сессии в секундах; None — вечно, 0 — новая на каждый запрос
+
+RETRY_ON_ERROR = False  # повторять запрос при сетевых ошибках
+RETRY_TIMEOUT = 2       # пауза между повторами, секунд
+MAX_RETRIES = 15        # всего попыток при RETRY_ON_ERROR
+RETRY_ENGINE = 1        # 1 — повторы с паузой (как telebot), 2 — urllib3 Retry
+
+# TLS-проверка включена: цепочка platform-api2.max.ru подписана сертификатами
+# Минцифры, они встроены в библиотеку (core/network/cacert.py, источник —
+# gosuslugi.ru/crt). Флаг глушит предупреждения urllib3 — актуально только
+# при CA_BUNDLE = False
+ignore_warnings = False
 # Как telebot.apihelper.ENABLE_MIDDLEWARE: регистрация middleware
 # (bot.middleware_handler) работает только после ENABLE_MIDDLEWARE = True
 ENABLE_MIDDLEWARE = False
@@ -24,7 +51,9 @@ class Api:
         """
         if ignore_warnings:
             requests.packages.urllib3.disable_warnings()
-        self.client = Client(token=token, proxy=proxy)
+        # модульный apihelper.proxy клиент читает сам на каждый запрос —
+        # не запекаем его сюда, иначе apihelper.proxy = None не отключит прокси
+        self.client = Client(token=token)
 
     def get_my_info(self) -> Dict[str, Any]:
         """
@@ -45,7 +74,10 @@ class Api:
         :return: Список обновлений
         :rtype: Dict[str, Any]
         """
-        params = extra or {}
+        params = dict(extra) if extra else {}
+        # длительность серверного удержания long polling; по ней Client
+        # поднимает и HTTP-таймаут чтения (timeout + 5, как в telebot)
+        params.setdefault("timeout", LONG_POLLING_TIMEOUT)
 
         if allowed_updates:
             params["types"] = ",".join(allowed_updates)
@@ -179,7 +211,12 @@ class Api:
         :return: Json с url для загрузки файла
         :rtype: Dict[str: Any]
         """
-        return self.client.request(method="POST", url=url, files=files, content_types=content_types)
+        # тело файла уходит на connect-фазе таймаута — оставляем загрузкам
+        # прежний бюджет 60 секунд, а не общий CONNECT_TIMEOUT
+        return self.client.request(
+            method="POST", url=url, files=files,
+            content_types=content_types, timeout=60
+        )
 
     def set_webhook(
         self,
