@@ -217,15 +217,6 @@ class MaxiBot:
             )
         else:
             self._worker_pool = None
-        self.handlers = {
-            "update": [],  # Общие обработчики для всех типов обновлений
-            UpdateType.MESSAGE_CREATED: [],
-            UpdateType.MESSAGE_CALLBACK: [],
-            UpdateType.BOT_STARTED: [],
-            UpdateType.MESSAGE_EDITED: [],
-            UpdateType.MESSAGE_DELETED: [],
-            UpdateType.MESSAGE_CHAT_CREATED: [],
-        }
         self.message_handlers = []
         self.callback_query_handlers = []
         # middleware (см. middleware_handler): по типам обновлений MAX и общие.
@@ -394,17 +385,6 @@ class MaxiBot:
             on_error=self._report_exception,
         )
         await self.poll.loop(self._process_update)
-
-    # def on(self, update_type: str):
-    #     """
-    #     Декоратор для регистрации обработчика определенного типа обновлений
-
-    #     :param update_type: Тип обновления (см. UpdateType)
-    #     """
-    #     def decorator(func: HandlerFunc):
-    #         self.handlers.setdefault(update_type, []).append(func)
-    #         return func
-    #     return decorator
 
     def message_handler(
         self,

@@ -130,4 +130,3 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **COMMENT_CREATED** (`str`) - Создан комментарий  
 * **COMMENT_EDITED** (`str`) - Комментарий изменён  
 * **COMMENT_REMOVED** (`str`) - Комментарий удалён  
-* **MESSAGE_CHAT_CREATED** (`str`) - Устаревшее: в текущей документации MAX такого обновления нет  

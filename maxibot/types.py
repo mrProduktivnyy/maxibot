@@ -44,7 +44,6 @@ class UpdateType:
     COMMENT_CREATED = "comment_created"
     COMMENT_EDITED = "comment_edited"
     COMMENT_REMOVED = "comment_removed"
-    MESSAGE_CHAT_CREATED = "message_chat_created"  # в текущей документации MAX такого обновления нет
 
 
 class WebAppInfo:

@@ -25,15 +25,15 @@ DOCUMENTED = {
 assert set(update_types) == DOCUMENTED and len(update_types) == len(DOCUMENTED), update_types
 print('1 ok: util.update_types — 18 типов обновлений из документации MAX')
 
-# 2. Каждая константа UpdateType — реальный тип MAX; MESSAGE_CHAT_CREATED —
-#    устаревшее исключение, которого в документации нет
+# 2. Каждая константа UpdateType — реальный тип MAX; фантомов нет
+#    (MESSAGE_CHAT_CREATED, которого в документации не было, удалён)
 constants = {name: value for name, value in vars(UpdateType).items() if name.isupper()}
 for name, value in constants.items():
-    if name != "MESSAGE_CHAT_CREATED":
-        assert value in DOCUMENTED, (name, value)
+    assert value in DOCUMENTED, (name, value)
+assert not hasattr(UpdateType, "MESSAGE_CHAT_CREATED")
 assert UpdateType.MESSAGE_REMOVED == "message_removed"
 assert UpdateType.MESSAGE_DELETED == "message_removed"  # прежнее имя: "message_deleted" MAX не присылает
-print('2 ok: константы UpdateType соответствуют документации')
+print('2 ok: константы UpdateType соответствуют документации, фантомов нет')
 
 # 3. У каждого документированного типа есть константа
 assert DOCUMENTED <= set(constants.values()), DOCUMENTED - set(constants.values())
