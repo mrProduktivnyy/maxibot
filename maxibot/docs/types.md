@@ -61,8 +61,10 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 Класс чата  
 **Параметры:**
 * **id** (`str`) - Идентификатор чата  
-* **type** (`str`) - Тип чата  
+* **type** (`str`) - Тип чата (в message.chat — сырой тип MAX: dialog/chat/channel)  
 * **user_id** (`str`) - Идетификатор пользователя, если сообщение было отправлено пользователю  
+
+Классметод `Chat.from_chat_info(info, api)` строит Chat из ответа GET /chats/{chatId} (используется bot.get_chat): id, type с телеботовскими именами (dialog → private, chat → group, channel → channel), title, description, photo (URL иконки), pinned_message (Message или None), invite_link, для диалогов — first_name/last_name/username собеседника; дополнительно status, participants_count, is_public  
 ## class maxibot.types.User(update: Dict[str, Any])
 Класс пользователя  
 **Параметры:**

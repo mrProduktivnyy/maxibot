@@ -690,6 +690,28 @@ class User(JsonDeserializable):
             self.language_code = update.get("user_locale")
 
 
+class _PreloadedChatInfoApi:
+    """
+    Обёртка Api с предзагруженным ответом GET /chats/{chatId}: сборка
+    pinned_message в Chat.from_chat_info не должна ходить в сеть за
+    чатом, который уже в руках (Chat.get_chat_title дергает
+    get_chat_info на каждое построение). Остальные вызовы делегируются
+    настоящему Api.
+    """
+
+    def __init__(self, api, chat_info):
+        self._api = api
+        self._chat_info = chat_info
+
+    def get_chat_info(self, chat_id):
+        if chat_id == self._chat_info.get("chat_id"):
+            return self._chat_info
+        return self._api.get_chat_info(chat_id=chat_id)
+
+    def __getattr__(self, name):
+        return getattr(self._api, name)
+
+
 class Chat(JsonDeserializable):
     """
     Класс чата
@@ -729,6 +751,93 @@ class Chat(JsonDeserializable):
             return None
         info = self.api.get_chat_info(chat_id=chat_id)
         return info.get("title")
+
+    # маппинг типов чата MAX -> имена telebot (channel совпадает)
+    _CHAT_TYPE_MAP = {"dialog": "private", "chat": "group"}
+
+    # атрибуты telebot.types.Chat 4.15.4 — у результата get_chat
+    # выставляются в None до заполнения реальных полей, чтобы
+    # перенесённый код не падал с AttributeError (прецедент —
+    # Message._TELEBOT_ATTRIBUTES)
+    _TELEBOT_ATTRIBUTES = (
+        "id", "type", "title", "username", "first_name", "last_name",
+        "photo", "bio", "has_private_forwards", "description",
+        "invite_link", "pinned_message", "permissions", "slow_mode_delay",
+        "message_auto_delete_time", "has_protected_content",
+        "sticker_set_name", "can_set_sticker_set", "linked_chat_id",
+        "location", "join_to_send_messages", "join_by_request",
+        "has_restricted_voice_and_video_messages", "is_forum",
+        "active_usernames", "emoji_status_custom_emoji_id",
+        "has_hidden_members", "has_aggressive_anti_spam_enabled",
+        "emoji_status_expiration_date", "available_reactions",
+        "accent_color_id", "background_custom_emoji_id",
+        "profile_accent_color_id", "profile_background_custom_emoji_id",
+        "has_visible_history",
+    )
+
+    @classmethod
+    def from_chat_info(cls, info: Dict[str, Any], api: Api) -> "Chat":
+        """
+        Строит Chat из ответа GET /chats/{chatId} (для bot.get_chat) —
+        в отличие от конструктора, который собирает чат из обновления.
+
+        Поля как в telebot: id, type (типы MAX мапятся в телеботовские:
+        dialog -> private, chat -> group, channel -> channel), title,
+        description, photo (URL иконки чата — строка, а не ChatPhoto),
+        pinned_message (Message или None), invite_link; для диалогов —
+        first_name/last_name/username и bio (описание профиля)
+        собеседника из dialog_with_user. Остальные атрибуты
+        telebot.types.Chat существуют и равны None (permissions,
+        is_forum и т.п.). Дополнительно поля MAX: status,
+        participants_count, is_public.
+
+        Отличие от message.chat: там type — сырой тип MAX
+        ("dialog"/"chat"/"channel"), исторически.
+        """
+        chat = cls.__new__(cls)
+        # сначала все телеботовские атрибуты None, реальные значения
+        # перекрывают их ниже
+        for attribute in cls._TELEBOT_ATTRIBUTES:
+            setattr(chat, attribute, None)
+        chat.api = api
+        chat.id = info.get("chat_id")
+        raw_type = info.get("type")
+        chat.type = cls._CHAT_TYPE_MAP.get(raw_type, raw_type)
+        chat.title = info.get("title")
+        chat.description = info.get("description")
+        icon = info.get("icon") or {}
+        chat.photo = icon.get("url")
+        chat.invite_link = info.get("link")
+        chat.user_id = None
+        dialog_with_user = info.get("dialog_with_user") or {}
+        if dialog_with_user:
+            chat.user_id = dialog_with_user.get("user_id")
+            chat.first_name = dialog_with_user.get("first_name")
+            chat.last_name = dialog_with_user.get("last_name")
+            chat.username = dialog_with_user.get("username")
+            # телеботовский bio приватного чата — описание профиля
+            # собеседника (UserWithPhoto.description)
+            chat.bio = dialog_with_user.get("description")
+        pinned = info.get("pinned_message")
+        if pinned:
+            pinned_update = {
+                # sender по спеке может быть null (пост от имени
+                # канала) — User.__init__ такой null не переживает
+                "message": {**pinned, "sender": pinned.get("sender") or {}},
+                # timestamp закрепа — на верхний уровень, где его ждёт
+                # Message._get_msg_timestamp (иначе date был бы None)
+                "timestamp": pinned.get("timestamp"),
+            }
+            # сборка Message тянет Chat.get_chat_title -> GET того же
+            # чата; ответ уже в руках — подсовываем его без сети
+            chat.pinned_message = Message(
+                update=pinned_update, api=_PreloadedChatInfoApi(api, info)
+            )
+        # поля MAX без телеботовских аналогов
+        chat.status = info.get("status")
+        chat.participants_count = info.get("participants_count")
+        chat.is_public = info.get("is_public")
+        return chat
 
 
 class ChatLink(JsonDeserializable):

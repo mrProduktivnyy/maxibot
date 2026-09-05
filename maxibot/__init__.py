@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 
 from maxibot import apihelper, util
 from maxibot.apihelper import Api
-from maxibot.types import Message, CallbackQuery, InputMedia, MessageID, Update
+from maxibot.types import Chat, Message, CallbackQuery, InputMedia, MessageID, Update
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.exceptions import (
@@ -3171,6 +3171,162 @@ class MaxiBot:
         Метод получения информации о боте
         """
         return self.api.leave_chat(chat_id=chat_id)
+
+    def get_chat(self, chat_id: Union[int, str]) -> Chat:
+        """
+        Возвращает информацию о чате (GET /chats/{chatId}). Сигнатура
+        один в один с telebot.get_chat.
+
+        Поля результата как в telebot: id, type — типы MAX мапятся
+        в телеботовские (dialog -> private, chat -> group,
+        channel -> channel), title, description, photo (URL иконки
+        чата — строка, а не ChatPhoto с file_id), pinned_message
+        (Message или None), invite_link (постоянная ссылка чата);
+        для диалогов — first_name/last_name/username собеседника.
+        Дополнительно поля MAX: status, participants_count, is_public.
+
+        Отличие от message.chat: там type — сырой тип MAX
+        ("dialog"/"chat"/"channel"), исторически; у get_chat —
+        телеботовские имена, чтобы работали перенесённые проверки
+        вида chat.type == "private". Остальные атрибуты
+        telebot.types.Chat существуют и равны None (permissions,
+        is_forum и т.п. — в MAX их нет); bio диалога — описание
+        профиля собеседника.
+
+        :param chat_id: Идентификатор чата; строкой, как в telebot,
+            можно передать "@username" или публичную ссылку чата
+            (в MAX есть GET /chats/{chatLink}). У PATCH-методов
+            (set_chat_*) такого маршрута нет — там только числовой id
+        :type chat_id: Union[int, str]
+
+        :return: Информация о чате
+        :rtype: Chat
+        """
+        info = self.api.get_chat_info(chat_id=chat_id)
+        return Chat.from_chat_info(info if isinstance(info, dict) else {}, api=self.api)
+
+    def get_chat_member_count(self, chat_id: Union[int, str]) -> int:
+        """
+        Возвращает число участников чата (participants_count из
+        GET /chats/{chatId}). Сигнатура один в один с
+        telebot.get_chat_member_count. Для диалогов MAX всегда
+        возвращает 2 (как и Telegram для private-чатов).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :return: Число участников
+        :rtype: int
+        """
+        info = self.api.get_chat_info(chat_id=chat_id)
+        return info.get("participants_count") if isinstance(info, dict) else None
+
+    def get_chat_members_count(self, *args, **kwargs) -> int:
+        """
+        Устаревший алиас get_chat_member_count — как в telebot,
+        предупреждает в логгере и зовёт новый метод.
+        """
+        logger.warning(
+            "get_chat_members_count устарел — используйте "
+            "get_chat_member_count (как в telebot)"
+        )
+        return self.get_chat_member_count(*args, **kwargs)
+
+    def set_chat_title(self, chat_id: Union[int, str], title: str) -> bool:
+        """
+        Меняет название чата (PATCH /chats/{chatId} с {"title"}).
+        Сигнатура один в один с telebot.set_chat_title.
+
+        Название диалога сменить нельзя (как и private-чата
+        в Telegram) — MAX ответит ошибкой, она пробросится
+        исключением. Участники увидят системное сообщение
+        об изменении (поведение MAX по умолчанию, как в Telegram).
+
+        :param chat_id: ЧИСЛОВОЙ идентификатор чата — в отличие от
+            telebot, "@username" здесь не работает: у PATCH /chats
+            в MAX нет маршрута по ссылке (у get_chat — есть)
+        :type chat_id: Union[int, str]
+
+        :param title: Новое название, 1–200 символов (лимит MAX;
+            в Telegram — 1–128)
+        :type title: str
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        response = self.api.edit_chat_info(chat_id, {"title": title})
+        return isinstance(response, dict)
+
+    def set_chat_description(self, chat_id: Union[int, str],
+                             description: Optional[str] = None) -> bool:
+        """
+        Меняет описание чата (PATCH /chats/{chatId} с {"description"}).
+        Сигнатура один в один с telebot.set_chat_description.
+
+        Как в telebot/Telegram: description=None или пустая строка —
+        описание удаляется (MAX удаляет по пустой строке). Лимит MAX —
+        16000 символов (в Telegram — 255).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param description: Новое описание; None/"" — удалить
+        :type description: Optional[str]
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        response = self.api.edit_chat_info(
+            chat_id,
+            {"description": description if description is not None else ""},
+        )
+        return isinstance(response, dict)
+
+    def set_chat_photo(self, chat_id: Union[int, str], photo: Any) -> bool:
+        """
+        Меняет фото (иконку) чата — PATCH /chats/{chatId} с {"icon"}.
+        Сигнатура один в один с telebot.set_chat_photo.
+
+        photo — байты или file-like объект (файл загружается через
+        POST /uploads?type=image, в иконку уходит токен); строка —
+        расширение против telebot: http(s)-ссылка на изображение
+        (MAX скачает сам) или токен ранее загруженного изображения.
+        Участники увидят системное сообщение об изменении.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param photo: Изображение — байты, file-like, URL или токен
+        :type photo: Any
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        icon = InputMedia(type="photo", media=photo).to_dict(api=self.api)
+        payload = icon.get("payload") if isinstance(icon, dict) else None
+        if not payload:
+            raise ValueError(
+                "set_chat_photo: не удалось подготовить изображение — "
+                "передайте байты, file-like объект, URL или токен"
+            )
+        response = self.api.edit_chat_info(chat_id, {"icon": payload})
+        return isinstance(response, dict)
+
+    def delete_chat_photo(self, chat_id: Union[int, str]) -> bool:
+        """
+        Удаляет фото (иконку) чата — PATCH /chats/{chatId}
+        с {"icon": null} (поле по спеке nullable). Сигнатура один
+        в один с telebot.delete_chat_photo. Если сервер MAX отвергнет
+        null-иконку, ошибка пробросится исключением.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        response = self.api.edit_chat_info(chat_id, {"icon": None})
+        return isinstance(response, dict)
 
     def callback_query_handler(self, data=None, **kwargs):
         """

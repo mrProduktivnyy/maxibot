@@ -190,6 +190,22 @@ class Api:
         """
         return self.client.request("GET", f"/chats/{chat_id}")
 
+    def edit_chat_info(self, chat_id, patch: Dict[str, Any], timeout=None):
+        """
+        Апи метод изменения информации о чате (PATCH /chats/{chatId}).
+
+        :param chat_id: Идентификатор чата
+        :param patch: Тело ChatPatch: title, description, icon
+            (PhotoAttachmentRequestPayload или null), pin, notify
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Обновлённый объект чата
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "PATCH", f"/chats/{chat_id}", data=patch, timeout=timeout
+        )
+
     def send_action(self, chat_id, action: str, timeout=None):
         """
         Апи метод отправки действия бота в чат (POST /chats/{chatId}/actions):
