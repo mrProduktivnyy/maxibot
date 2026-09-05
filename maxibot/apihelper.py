@@ -425,6 +425,21 @@ class Api:
         """
         return self.client.request("GET", "/me")
 
+    def edit_bot_info(self, patch: Dict[str, Any], timeout=None):
+        """
+        Апи метод изменения профиля бота (PATCH /me). Заполняются
+        только переданные поля, остальные не трогаются.
+
+        :param patch: Тело BotPatch: first_name (1–59), description
+            (1–16000, null — снять), commands (до 32; [] — удалить все),
+            photo (PhotoAttachmentRequestPayload)
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Обновлённый BotInfo
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request("PATCH", "/me", data=patch, timeout=timeout)
+
     def leave_chat(self, chat_id: str):
         """
         Апи метод для получения информации о боте

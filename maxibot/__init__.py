@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 from maxibot import apihelper, util
 from maxibot.apihelper import Api
 from maxibot.types import Chat, ChatMember, Message, CallbackQuery, InputMedia, MessageID, Update
+from maxibot.types import BotCommand, BotName, BotDescription, BotShortDescription
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.exceptions import (
@@ -3869,6 +3870,313 @@ class MaxiBot:
             },
             api=self.api,
         )
+
+    def _warn_commands_scope_unsupported(self, method_name, scope, language_code):
+        """Скоупов и языковых версий команд в MAX нет — предупреждаем,
+        если мигрантский код на них рассчитывает."""
+        if scope is not None:
+            logger.warning(
+                "%s: скоупов команд в MAX нет — scope игнорируется, "
+                "команды применяются во всех чатах", method_name
+            )
+        if language_code is not None:
+            logger.warning(
+                "%s: языковых версий команд в MAX нет — language_code "
+                "игнорируется", method_name
+            )
+
+    @staticmethod
+    def _bot_command_to_max(command) -> Dict[str, Any]:
+        """
+        Приводит команду к объекту BotCommand MAX ({"name",
+        "description"}): принимает maxibot/telebot BotCommand (любой
+        объект с атрибутом command) и словарь с ключами name/command.
+        """
+        if isinstance(command, BotCommand):
+            data = command.to_dict()
+        else:
+            if hasattr(command, "command"):
+                name = getattr(command, "command", None)
+                description = getattr(command, "description", None)
+            elif isinstance(command, dict):
+                name = command.get("name") or command.get("command")
+                description = command.get("description")
+            else:
+                raise ValueError(
+                    "set_my_commands: команда должна быть BotCommand или "
+                    f"словарём с ключом name/command, получено: {command!r}"
+                )
+            data = {"name": (name or "").lstrip("/")}
+            # пустая строка — как «без описания» (по спеке minLength 1)
+            if description:
+                data["description"] = description
+        if not data.get("name"):
+            raise ValueError(
+                "set_my_commands: у команды пустое имя — нужен хотя бы "
+                "один символ (лимит MAX — 64)"
+            )
+        return data
+
+    def set_my_commands(
+        self,
+        commands: List[BotCommand],
+        scope: Optional[Any] = None,
+        language_code: Optional[str] = None,
+    ) -> bool:
+        """
+        Задаёт список команд бота (PATCH /me с {"commands"}) — меню
+        команд в клиенте MAX. Сигнатура один в один
+        с telebot.set_my_commands. Список заменяется целиком.
+
+        Команды — maxibot.types.BotCommand (или телеботовские
+        BotCommand/словари {"command"/"name", "description"}); ведущий
+        '/' срезается. Лимиты MAX: до 32 команд, имя до 64 символов,
+        описание до 128. Скоупов и языковых версий в MAX нет — scope
+        и language_code игнорируются с предупреждением.
+
+        :param commands: Список команд
+        :type commands: List[BotCommand]
+
+        :param scope: Игнорируется с предупреждением — скоупов в MAX нет
+        :type scope: Optional[Any]
+
+        :param language_code: Игнорируется с предупреждением
+        :type language_code: Optional[str]
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        self._warn_commands_scope_unsupported(
+            "set_my_commands", scope, language_code
+        )
+        # commands=None падает TypeError, как в telebot: молча слать []
+        # значило бы удалить все команды — тихая потеря вместо краша
+        payload = [self._bot_command_to_max(command) for command in commands]
+        response = self.api.edit_bot_info({"commands": payload})
+        return isinstance(response, dict)
+
+    def get_my_commands(
+        self,
+        scope: Optional[Any] = None,
+        language_code: Optional[str] = None,
+    ) -> List[BotCommand]:
+        """
+        Возвращает список команд бота (commands из GET /me). Сигнатура
+        один в один с telebot.get_my_commands. Скоупов и языковых
+        версий в MAX нет — scope и language_code игнорируются
+        с предупреждением.
+
+        :return: Список команд (у каждой .command без '/'
+            и .description)
+        :rtype: List[BotCommand]
+        """
+        self._warn_commands_scope_unsupported(
+            "get_my_commands", scope, language_code
+        )
+        info = self.api.get_bot_info()
+        commands = info.get("commands") if isinstance(info, dict) else None
+        return [BotCommand.from_max(command) for command in commands or []]
+
+    def delete_my_commands(
+        self,
+        scope: Optional[Any] = None,
+        language_code: Optional[str] = None,
+    ) -> bool:
+        """
+        Удаляет все команды бота (PATCH /me с {"commands": []} — по
+        спеке пустой список снимает команды). Сигнатура один в один
+        с telebot.delete_my_commands. scope и language_code
+        игнорируются с предупреждением — скоупов в MAX нет.
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        self._warn_commands_scope_unsupported(
+            "delete_my_commands", scope, language_code
+        )
+        response = self.api.edit_bot_info({"commands": []})
+        return isinstance(response, dict)
+
+    def set_my_name(
+        self,
+        name: Optional[str] = None,
+        language_code: Optional[str] = None,
+    ) -> bool:
+        """
+        Меняет отображаемое имя бота (PATCH /me с {"first_name"}) —
+        в Telegram это умеет только BotFather, а MAX даёт ботам API.
+        Сигнатура один в один с telebot.set_my_name.
+
+        Отличие: сбросить имя нельзя — name обязателен (1–59 символов),
+        с None/пустым будет ValueError (в Telegram пустое имя
+        возвращает username).
+
+        :param name: Новое имя, 1–59 символов
+        :type name: Optional[str]
+
+        :param language_code: Игнорируется с предупреждением —
+            языковых версий имени в MAX нет
+        :type language_code: Optional[str]
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        if language_code is not None:
+            logger.warning(
+                "set_my_name: языковых версий имени в MAX нет — "
+                "language_code игнорируется"
+            )
+        if not name:
+            raise ValueError(
+                "set_my_name: сбросить имя бота в MAX нельзя — "
+                "передайте новое имя (1–59 символов)"
+            )
+        response = self.api.edit_bot_info({"first_name": name})
+        return isinstance(response, dict)
+
+    def get_my_name(self, language_code: Optional[str] = None) -> BotName:
+        """
+        Возвращает имя бота (first_name и last_name из GET /me,
+        склеенные пробелом). Сигнатура один в один
+        с telebot.get_my_name; language_code игнорируется
+        с предупреждением — языковых версий имени в MAX нет.
+
+        :return: Имя бота (.name)
+        :rtype: BotName
+        """
+        if language_code is not None:
+            logger.warning(
+                "get_my_name: языковых версий имени в MAX нет — "
+                "language_code игнорируется"
+            )
+        info = self.api.get_bot_info()
+        info = info if isinstance(info, dict) else {}
+        parts = [info.get("first_name"), info.get("last_name")]
+        return BotName(name=" ".join(part for part in parts if part))
+
+    def set_my_description(
+        self,
+        description: Optional[str] = None,
+        language_code: Optional[str] = None,
+    ) -> bool:
+        """
+        Меняет описание бота (PATCH /me с {"description"}) — в Telegram
+        это умеет только BotFather, а MAX даёт ботам API. Сигнатура
+        один в один с telebot.set_my_description. None/пустая строка —
+        описание снимается (уходит null, поле по спеке nullable).
+        Лимит MAX — 16000 символов (в Telegram — 512).
+
+        :param description: Новое описание; None/"" — удалить
+        :type description: Optional[str]
+
+        :param language_code: Игнорируется с предупреждением —
+            языковых версий описания в MAX нет
+        :type language_code: Optional[str]
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        if language_code is not None:
+            logger.warning(
+                "set_my_description: языковых версий описания в MAX "
+                "нет — language_code игнорируется"
+            )
+        response = self.api.edit_bot_info(
+            {"description": description if description else None}
+        )
+        return isinstance(response, dict)
+
+    def get_my_description(
+        self, language_code: Optional[str] = None
+    ) -> BotDescription:
+        """
+        Возвращает описание бота (description из GET /me; пустая
+        строка, если не задано — как в Telegram). Сигнатура один
+        в один с telebot.get_my_description; language_code
+        игнорируется с предупреждением — языковых версий в MAX нет.
+
+        :return: Описание бота (.description)
+        :rtype: BotDescription
+        """
+        if language_code is not None:
+            logger.warning(
+                "get_my_description: языковых версий описания в MAX "
+                "нет — language_code игнорируется"
+            )
+        info = self.api.get_bot_info()
+        description = info.get("description") if isinstance(info, dict) else None
+        return BotDescription(description=description or "")
+
+    def set_my_short_description(
+        self,
+        short_description: Optional[str] = None,
+        language_code: Optional[str] = None,
+    ) -> bool:
+        """
+        Заглушка: отдельного короткого описания в MAX нет — у бота
+        одно description. Метод предупреждает и возвращает False,
+        НЕ трогая основное описание (иначе типовой мигрантский код
+        «set_my_description(длинное); set_my_short_description(короткое)»
+        затирал бы длинное описание коротким). Сигнатура один в один
+        с telebot.set_my_short_description.
+
+        :return: Всегда False
+        :rtype: bool
+        """
+        logger.warning(
+            "set_my_short_description: отдельного короткого описания "
+            "в MAX нет — вызов игнорируется, основное описание не "
+            "тронуто (используйте set_my_description)"
+        )
+        return False
+
+    def get_my_short_description(
+        self, language_code: Optional[str] = None
+    ) -> BotShortDescription:
+        """
+        Возвращает короткое описание бота. Отдельного короткого
+        описания в MAX нет — заполняется из единственного description
+        (пустая строка, если не задано). Сигнатура один в один
+        с telebot.get_my_short_description; language_code игнорируется
+        с предупреждением.
+
+        :return: Короткое описание (.short_description)
+        :rtype: BotShortDescription
+        """
+        if language_code is not None:
+            logger.warning(
+                "get_my_short_description: языковых версий описания "
+                "в MAX нет — language_code игнорируется"
+            )
+        info = self.api.get_bot_info()
+        description = info.get("description") if isinstance(info, dict) else None
+        return BotShortDescription(short_description=description or "")
+
+    def set_my_photo(self, photo: Any) -> bool:
+        """
+        Меняет аватар бота (PATCH /me с {"photo"}) — расширение MAX:
+        в Telegram аватар бота меняется только через BotFather,
+        в telebot аналога нет.
+
+        photo — байты или file-like объект (загружается через
+        POST /uploads?type=image, уходит токен); строка — http(s)-ссылка
+        на изображение или токен ранее загруженного.
+
+        :param photo: Изображение — байты, file-like, URL или токен
+        :type photo: Any
+
+        :return: True при успехе
+        :rtype: bool
+        """
+        icon = InputMedia(type="photo", media=photo).to_dict(api=self.api)
+        payload = icon.get("payload") if isinstance(icon, dict) else None
+        if not payload:
+            raise ValueError(
+                "set_my_photo: не удалось подготовить изображение — "
+                "передайте байты, file-like объект, URL или токен"
+            )
+        response = self.api.edit_bot_info({"photo": payload})
+        return isinstance(response, dict)
 
     def callback_query_handler(self, data=None, **kwargs):
         """

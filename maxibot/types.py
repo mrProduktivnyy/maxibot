@@ -960,6 +960,70 @@ class ChatMember(JsonDeserializable):
         self.full_avatar_url = member.get("full_avatar_url")
 
 
+class BotCommand(JsonDeserializable):
+    """
+    Команда бота — как telebot.types.BotCommand.
+
+    :param command: Имя команды; ведущий '/' при отправке срезается
+        (лимит MAX — 64 символа)
+    :type command: str
+
+    :param description: Описание команды — в отличие от telebot
+        необязательно (лимит MAX — 128 символов)
+    :type description: Optional[str]
+    """
+
+    def __init__(self, command: str, description: Optional[str] = None):
+        self.command = command
+        self.description = description
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Преобразует команду в объект BotCommand MAX ({"name",
+        "description"}); ведущие '/' срезаются.
+
+        :return: Словарь с данными команды
+        :rtype: Dict[str, Any]
+        """
+        name = (self.command or "").lstrip("/")
+        data = {"name": name}
+        # пустая строка — как «без описания»: description по спеке
+        # nullable, но с minLength 1 — "" сервер вправе отклонить
+        if self.description:
+            data["description"] = self.description
+        return data
+
+    @classmethod
+    def from_max(cls, data: Dict[str, Any]) -> "BotCommand":
+        """Строит BotCommand из объекта MAX ({"name", "description"})."""
+        data = data if isinstance(data, dict) else {}
+        return cls(command=data.get("name"), description=data.get("description"))
+
+
+class BotName(JsonDeserializable):
+    """Имя бота — как telebot.types.BotName (результат get_my_name)."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+
+class BotDescription(JsonDeserializable):
+    """Описание бота — как telebot.types.BotDescription
+    (результат get_my_description)."""
+
+    def __init__(self, description: str):
+        self.description = description
+
+
+class BotShortDescription(JsonDeserializable):
+    """Короткое описание бота — как telebot.types.BotShortDescription
+    (результат get_my_short_description). Отдельного короткого описания
+    в MAX нет — заполняется из единственного description."""
+
+    def __init__(self, short_description: str):
+        self.short_description = short_description
+
+
 class ChatLink(JsonDeserializable):
     """
     Класс ссылки на чат

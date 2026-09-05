@@ -64,6 +64,13 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **is_member** (`bool`) - False только у заглушки 'left'  
 
 Остальные атрибуты telebot.types.ChatMember существуют и равны None (until_date, is_anonymous, can_send_* и т.п.). Дополнительно сырые поля MAX: is_owner, is_admin, permissions (список прав как пришёл — в нём видны edit_link и view_stats, телеботовских флагов для них нет), alias, last_access_time, join_time, description (описание профиля), avatar_url, full_avatar_url  
+## class maxibot.types.BotCommand(command: str, description: Optional[str])
+Команда бота — как telebot.types.BotCommand. В MAX у команды поле name; при отправке ведущий '/' срезается (лимиты: имя 64, описание 128 символов). description, в отличие от telebot, необязателен  
+**Параметры:**
+* **command** (`str`) - Имя команды  
+* **description** (`str`) - Описание команды  
+## class maxibot.types.BotName(name: str) / BotDescription(description: str) / BotShortDescription(short_description: str)
+Результаты get_my_name / get_my_description / get_my_short_description — как одноимённые типы telebot. Отдельного короткого описания в MAX нет: BotShortDescription заполняется из единственного description  
 ## class maxibot.types.ChatLink(update: Dict[str, Any])
 Класс сериализации и работы с объектом чата в пересланном сообщении  
 **Параметры:**
