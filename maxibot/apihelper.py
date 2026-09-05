@@ -206,6 +206,148 @@ class Api:
             "PATCH", f"/chats/{chat_id}", data=patch, timeout=timeout
         )
 
+    def get_chat_members(self, chat_id, user_ids=None, marker=None,
+                         count=None, timeout=None):
+        """
+        Апи метод получения участников чата
+        (GET /chats/{chatId}/members). Видно только админам чата.
+
+        :param chat_id: Идентификатор чата
+        :param user_ids: Список id пользователей — вернуть только их
+            членство (уходит comma-separated строкой; count и marker
+            при этом сервером игнорируются)
+        :param marker: Указатель страницы из прошлого ответа
+        :param count: Размер страницы, 1–100 (по умолчанию сервера 20)
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"members": [...], "marker": ...})
+        :rtype: Dict[str: Any]
+        """
+        params = {}
+        if user_ids:
+            params["user_ids"] = ",".join(str(uid) for uid in user_ids)
+        if marker is not None:
+            params["marker"] = marker
+        if count is not None:
+            params["count"] = count
+        return self.client.request(
+            "GET", f"/chats/{chat_id}/members",
+            params=params or None, timeout=timeout
+        )
+
+    def get_chat_admins(self, chat_id, timeout=None):
+        """
+        Апи метод получения администраторов чата
+        (GET /chats/{chatId}/members/admins). Бот должен быть
+        администратором чата.
+
+        :param chat_id: Идентификатор чата
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"members": [...], "marker": ...})
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "GET", f"/chats/{chat_id}/members/admins", timeout=timeout
+        )
+
+    def set_chat_admins(self, chat_id, admins, timeout=None):
+        """
+        Апи метод назначения администраторов чата
+        (POST /chats/{chatId}/members/admins). Для уже назначенного
+        администратора работает как PUT: набор прав заменяется целиком
+        на переданный.
+
+        :param chat_id: Идентификатор чата
+        :param admins: Список объектов ChatAdmin:
+            {"user_id": int, "permissions": [...], "alias": str | None}
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"success": bool, "message": str})
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "POST", f"/chats/{chat_id}/members/admins",
+            data={"admins": list(admins)}, timeout=timeout
+        )
+
+    def delete_chat_admin(self, chat_id, user_id, timeout=None):
+        """
+        Апи метод снятия прав администратора
+        (DELETE /chats/{chatId}/members/admins/{userId}).
+
+        :param chat_id: Идентификатор чата
+        :param user_id: Идентификатор пользователя
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"success": bool, "message": str})
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "DELETE", f"/chats/{chat_id}/members/admins/{user_id}",
+            timeout=timeout
+        )
+
+    def add_chat_members(self, chat_id, user_ids, timeout=None):
+        """
+        Апи метод добавления участников в чат
+        (POST /chats/{chatId}/members). Боту нужно право
+        add_remove_members.
+
+        :param chat_id: Идентификатор чата
+        :param user_ids: Список id пользователей
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"success": bool, "failed_user_ids": [...],
+            "failed_user_details": [...]})
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "POST", f"/chats/{chat_id}/members",
+            data={"user_ids": list(user_ids)}, timeout=timeout
+        )
+
+    def remove_chat_member(self, chat_id, user_id, block=False, timeout=None):
+        """
+        Апи метод удаления участника из чата
+        (DELETE /chats/{chatId}/members). Боту нужно право
+        add_remove_members.
+
+        :param chat_id: Идентификатор чата
+        :param user_id: Идентификатор пользователя
+        :param block: True — заблокировать пользователя в чате;
+            работает только в чатах с публичной или приватной ссылкой,
+            в остальных сервер его игнорирует. Разблокировки в Bot API
+            MAX нет
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"success": bool, "message": str})
+        :rtype: Dict[str: Any]
+        """
+        params = {"user_id": user_id}
+        if block:
+            # requests сериализует True как "True" — MAX ждёт "true"
+            params["block"] = "true"
+        return self.client.request(
+            "DELETE", f"/chats/{chat_id}/members",
+            params=params, timeout=timeout
+        )
+
+    def get_chat_membership(self, chat_id, timeout=None):
+        """
+        Апи метод получения членства самого бота в чате
+        (GET /chats/{chatId}/members/me).
+
+        :param chat_id: Идентификатор чата
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json (объект ChatMember бота)
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "GET", f"/chats/{chat_id}/members/me", timeout=timeout
+        )
+
     def send_action(self, chat_id, action: str, timeout=None):
         """
         Апи метод отправки действия бота в чат (POST /chats/{chatId}/actions):

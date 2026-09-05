@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 
 from maxibot import apihelper, util
 from maxibot.apihelper import Api
-from maxibot.types import Chat, Message, CallbackQuery, InputMedia, MessageID, Update
+from maxibot.types import Chat, ChatMember, Message, CallbackQuery, InputMedia, MessageID, Update
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.exceptions import (
@@ -3327,6 +3327,416 @@ class MaxiBot:
         """
         response = self.api.edit_chat_info(chat_id, {"icon": None})
         return isinstance(response, dict)
+
+    def export_chat_invite_link(self, chat_id: Union[int, str]) -> str:
+        """
+        Возвращает ссылку-приглашение чата. Сигнатура один в один
+        с telebot.export_chat_invite_link.
+
+        Отличие от Telegram: ссылка НЕ перегенерируется — в MAX у чата
+        одна постоянная ссылка (поле link из GET /chats/{chatId}),
+        отозвать или пересоздать её через Bot API нельзя. У приватного
+        чата без ссылки вернётся None.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :return: Постоянная ссылка чата или None
+        :rtype: str
+        """
+        info = self.api.get_chat_info(chat_id=chat_id)
+        return info.get("link") if isinstance(info, dict) else None
+
+    @staticmethod
+    def _member_user_id(user_id):
+        """user_id из telebot приходит и строкой — для сравнения с
+        числовыми user_id MAX приводим к int, когда возможно."""
+        try:
+            return int(user_id)
+        except (TypeError, ValueError):
+            return user_id
+
+    def get_chat_member(self, chat_id: Union[int, str], user_id: int) -> ChatMember:
+        """
+        Возвращает информацию об участнике чата
+        (GET /chats/{chatId}/members?user_ids={user_id}). Сигнатура
+        один в один с telebot.get_chat_member. Видно только админам:
+        бот должен быть администратором чата.
+
+        Статусы MAX мапятся в телеботовские: владелец -> 'creator',
+        админ -> 'administrator', иначе 'member'; если пользователя
+        в чате нет, вернётся заглушка со status='left' (как в Telegram
+        для вышедших). Статусов 'restricted' и 'kicked' в MAX не
+        разглядеть. can_*-флаги собираются из прав MAX (см. ChatMember).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :return: Участник чата
+        :rtype: ChatMember
+        """
+        wanted = self._member_user_id(user_id)
+        response = self.api.get_chat_members(chat_id, user_ids=[wanted])
+        members = response.get("members") if isinstance(response, dict) else None
+        for member in members or []:
+            if member.get("user_id") == wanted:
+                return ChatMember(member)
+        return ChatMember({"user_id": wanted}, status="left")
+
+    def get_chat_administrators(self, chat_id: Union[int, str]) -> List[ChatMember]:
+        """
+        Возвращает администраторов чата
+        (GET /chats/{chatId}/members/admins). Сигнатура один в один
+        с telebot.get_chat_administrators. Бот должен быть
+        администратором чата — иначе MAX ответит ошибкой, она
+        пробросится исключением.
+
+        Владелец в списке имеет status='creator', остальные —
+        'administrator' (как в telebot).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :return: Список администраторов
+        :rtype: List[ChatMember]
+        """
+        response = self.api.get_chat_admins(chat_id)
+        members = response.get("members") if isinstance(response, dict) else None
+        return [ChatMember(member) for member in members or []]
+
+    def get_chat_membership(self, chat_id: Union[int, str]) -> ChatMember:
+        """
+        Возвращает членство самого бота в чате
+        (GET /chats/{chatId}/members/me) — расширение MAX, в telebot
+        аналога нет (ближайшее — get_chat_member(chat_id, bot.id)).
+        Удобно проверять, админ ли бот и какие у него права.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :return: Участник-бот
+        :rtype: ChatMember
+        """
+        member = self.api.get_chat_membership(chat_id)
+        return ChatMember(member if isinstance(member, dict) else {})
+
+    def ban_chat_member(
+        self,
+        chat_id: Union[int, str],
+        user_id: int,
+        until_date: Optional[Union[int, Any]] = None,
+        revoke_messages: Optional[bool] = None,
+    ) -> bool:
+        """
+        Удаляет пользователя из чата с блокировкой
+        (DELETE /chats/{chatId}/members с block=true). Сигнатура один
+        в один с telebot.ban_chat_member. Боту нужно право
+        add_remove_members.
+
+        Отличия от Telegram: блокировка действует только в чатах
+        с публичной или приватной ссылкой — в остальных MAX её
+        игнорирует и просто удаляет участника; временных банов нет —
+        until_date игнорируется с предупреждением (бан бессрочный);
+        разбана через Bot API тоже нет (unban_chat_member бросает
+        NotImplementedError) — снять блокировку может только
+        администратор вручную. Если нужно удалить с возможностью
+        вернуться — bot.api.remove_chat_member(chat_id, user_id)
+        без block.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :param until_date: Игнорируется с предупреждением — временных
+            банов в MAX нет
+        :type until_date: Optional[Union[int, datetime]]
+
+        :param revoke_messages: Игнорируется с предупреждением —
+            массового удаления сообщений при бане в MAX нет
+        :type revoke_messages: Optional[bool]
+
+        :return: True при успехе; False, если MAX ответил
+            success: false — telebot в такой ситуации бросает
+            ApiTelegramException, поэтому при переносе проверяйте
+            возврат. HTTP-ошибки, как и в telebot, бросают исключение
+        :rtype: bool
+        """
+        if until_date is not None:
+            logger.warning(
+                "ban_chat_member: until_date игнорируется — временных "
+                "банов в MAX нет, блокировка бессрочная"
+            )
+        if revoke_messages:
+            logger.warning(
+                "ban_chat_member: revoke_messages игнорируется — "
+                "массового удаления сообщений забаненного в MAX нет"
+            )
+        response = self.api.remove_chat_member(
+            chat_id, self._member_user_id(user_id), block=True
+        )
+        return bool(isinstance(response, dict) and response.get("success", False))
+
+    def kick_chat_member(self, *args, **kwargs) -> bool:
+        """
+        Устаревший алиас ban_chat_member — как в telebot, предупреждает
+        в логгере и зовёт новый метод.
+        """
+        logger.warning(
+            "kick_chat_member устарел — используйте ban_chat_member "
+            "(как в telebot)"
+        )
+        return self.ban_chat_member(*args, **kwargs)
+
+    def unban_chat_member(
+        self,
+        chat_id: Union[int, str],
+        user_id: int,
+        only_if_banned: Optional[bool] = False,
+    ) -> bool:
+        """
+        Заглушка: разбана в Bot API MAX нет. Сигнатура один в один
+        с telebot.unban_chat_member, но вызов всегда бросает
+        NotImplementedError (прецедент — answer_inline_query):
+        блокировка ban_chat_member необратима со стороны бота, снять
+        её может только администратор вручную в приложении.
+
+        Телеграмный приём «кикнуть с правом вернуться» (ban + unban)
+        в MAX делается одним вызовом
+        bot.api.remove_chat_member(chat_id, user_id) без block.
+
+        :raises NotImplementedError: всегда
+        """
+        raise NotImplementedError(
+            "unban_chat_member: в Bot API MAX нет разбана — блокировка "
+            "ban_chat_member необратима со стороны бота, её снимает "
+            "только администратор вручную. Удаление с возможностью "
+            "вернуться: bot.api.remove_chat_member(chat_id, user_id)"
+        )
+
+    def promote_chat_member(
+        self,
+        chat_id: Union[int, str],
+        user_id: int,
+        can_change_info: Optional[bool] = None,
+        can_post_messages: Optional[bool] = None,
+        can_edit_messages: Optional[bool] = None,
+        can_delete_messages: Optional[bool] = None,
+        can_invite_users: Optional[bool] = None,
+        can_restrict_members: Optional[bool] = None,
+        can_pin_messages: Optional[bool] = None,
+        can_promote_members: Optional[bool] = None,
+        is_anonymous: Optional[bool] = None,
+        can_manage_chat: Optional[bool] = None,
+        can_manage_video_chats: Optional[bool] = None,
+        can_manage_voice_chats: Optional[bool] = None,
+        can_manage_topics: Optional[bool] = None,
+        can_post_stories: Optional[bool] = None,
+        can_edit_stories: Optional[bool] = None,
+        can_delete_stories: Optional[bool] = None,
+    ) -> bool:
+        """
+        Назначает пользователя администратором чата
+        (POST /chats/{chatId}/members/admins) или, если все флаги
+        False/None, снимает с него админку
+        (DELETE /chats/{chatId}/members/admins/{userId}) — как
+        в Telegram, где promote со всеми False разжалует. Сигнатура
+        один в один с telebot.promote_chat_member. Боту нужно право
+        add_admins.
+
+        Телеботовские флаги мапятся в права MAX:
+        can_change_info -> change_chat_info;
+        can_pin_messages -> pin_message;
+        can_invite_users и can_restrict_members -> add_remove_members
+        (в MAX это одно право «добавлять и удалять участников»);
+        can_promote_members -> add_admins;
+        can_post_messages -> write (в каналах — писать посты,
+        в группах MAX это же право позволяет править и удалять чужие
+        сообщения); can_edit_messages -> edit и
+        can_delete_messages -> delete (в MAX действуют в каналах);
+        can_manage_video_chats/can_manage_voice_chats -> can_call;
+        can_manage_chat -> read_all_messages (читать все сообщения).
+        Флаги без аналога (is_anonymous, can_manage_topics,
+        can_post_stories, can_edit_stories, can_delete_stories) при
+        True игнорируются с предупреждением. Права MAX edit_link
+        и view_stats из telebot не выдать — при необходимости
+        используйте bot.api.set_chat_admins напрямую.
+
+        Повторный вызов заменяет набор прав целиком (PUT-семантика
+        MAX — совпадает с Telegram). Внимание: alias при этом не
+        передаётся, поэтому выставленный ранее титул админа может
+        сброситься (в Telegram custom_title повторный promote
+        переживает) — при необходимости повторите
+        set_chat_administrator_custom_title после смены прав.
+
+        :return: True при успехе; False, если MAX ответил
+            success: false — при переносе проверяйте возврат
+            (telebot бросил бы исключение). False и предупреждение —
+            также если запрошены только права без аналога в MAX
+            (например, один is_anonymous): назначить такого админа
+            нечем, а разжаловать было бы противоположно намерению
+        :rtype: bool
+        """
+        unmapped_flags = (
+            ("is_anonymous", is_anonymous),
+            ("can_manage_topics", can_manage_topics),
+            ("can_post_stories", can_post_stories),
+            ("can_edit_stories", can_edit_stories),
+            ("can_delete_stories", can_delete_stories),
+        )
+        for name, value in unmapped_flags:
+            if value:
+                logger.warning(
+                    "promote_chat_member: флаг %s игнорируется — "
+                    "аналога в MAX нет", name
+                )
+
+        flag_permissions = (
+            (can_change_info, ("change_chat_info",)),
+            (can_post_messages, ("write",)),
+            (can_edit_messages, ("edit",)),
+            (can_delete_messages, ("delete",)),
+            (can_invite_users, ("add_remove_members",)),
+            (can_restrict_members, ("add_remove_members",)),
+            (can_pin_messages, ("pin_message",)),
+            (can_promote_members, ("add_admins",)),
+            (can_manage_chat, ("read_all_messages",)),
+            (can_manage_video_chats, ("can_call",)),
+            (can_manage_voice_chats, ("can_call",)),
+        )
+        permissions = []
+        for value, mapped in flag_permissions:
+            if value:
+                for permission in mapped:
+                    if permission not in permissions:
+                        permissions.append(permission)
+
+        wanted = self._member_user_id(user_id)
+        if permissions:
+            response = self.api.set_chat_admins(
+                chat_id, [{"user_id": wanted, "permissions": permissions}]
+            )
+        elif any(value for _, value in unmapped_flags):
+            # запрошены ТОЛЬКО права без аналога в MAX: делать DELETE
+            # нельзя — это разжаловало бы пользователя, хотя намерение
+            # было противоположным (в Telegram такой promote назначает
+            # админа)
+            logger.warning(
+                "promote_chat_member: запрошены только права без аналога "
+                "в MAX — пользователь %s не назначен админом и не "
+                "разжалован", user_id
+            )
+            return False
+        else:
+            # как в Telegram: promote со всеми False — разжалование
+            response = self.api.delete_chat_admin(chat_id, wanted)
+        return bool(isinstance(response, dict) and response.get("success", False))
+
+    def set_chat_administrator_custom_title(
+        self, chat_id: Union[int, str], user_id: int, custom_title: str
+    ) -> bool:
+        """
+        Задаёт администратору отображаемый титул — alias админа MAX.
+        Сигнатура один в один с telebot.set_chat_administrator_custom_title.
+
+        Пользователь уже должен быть администратором (иначе ValueError —
+        сначала promote_chat_member): метод читает текущие права через
+        GET /chats/{chatId}/members/admins и переотправляет их вместе
+        с alias (POST admins заменяет набор прав целиком, поэтому слать
+        один alias нельзя).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param user_id: Идентификатор администратора
+        :type user_id: int
+
+        :param custom_title: Титул; лимит telebot (16 символов) MAX
+            не навязывает
+        :type custom_title: str
+
+        :return: True при успехе; False, если MAX ответил
+            success: false — при переносе проверяйте возврат
+            (telebot бросил бы исключение)
+        :rtype: bool
+        """
+        wanted = self._member_user_id(user_id)
+        response = self.api.get_chat_admins(chat_id)
+        members = response.get("members") if isinstance(response, dict) else None
+        target = None
+        for member in members or []:
+            if member.get("user_id") == wanted:
+                target = member
+                break
+        if target is None:
+            raise ValueError(
+                "set_chat_administrator_custom_title: пользователь "
+                f"{user_id} не администратор чата — сначала назначьте "
+                "его через promote_chat_member"
+            )
+        if target.get("is_owner"):
+            # у владельца permissions по спеке null — POST с пустым
+            # набором прав по PUT-семантике MAX попытался бы их срезать;
+            # в Telegram титул владельцу ботом тоже не задать
+            raise ValueError(
+                "set_chat_administrator_custom_title: пользователь "
+                f"{user_id} — владелец чата, титул владельцу через "
+                "Bot API не задать (как в Telegram, где метод работает "
+                "только для назначенных администраторов)"
+            )
+        admin = {
+            "user_id": wanted,
+            "permissions": target.get("permissions") or [],
+            "alias": custom_title,
+        }
+        result = self.api.set_chat_admins(chat_id, [admin])
+        return bool(isinstance(result, dict) and result.get("success", False))
+
+    def add_chat_members(self, chat_id: Union[int, str],
+                         user_ids: Union[int, List[int]]) -> bool:
+        """
+        Добавляет участников в чат (POST /chats/{chatId}/members) —
+        расширение MAX: Telegram-боты добавлять людей не умеют,
+        в telebot аналога нет. Боту нужно право add_remove_members.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param user_ids: Идентификатор пользователя или их список
+        :type user_ids: Union[int, List[int]]
+
+        :return: True, если все добавлены; если кого-то добавить
+            не удалось (failed_user_ids в ответе — например, настройки
+            приватности), пишется предупреждение и возвращается False
+        :rtype: bool
+        """
+        if isinstance(user_ids, (int, str)):
+            user_ids = [user_ids]
+        response = self.api.add_chat_members(
+            chat_id, [self._member_user_id(uid) for uid in user_ids]
+        )
+        response = response if isinstance(response, dict) else {}
+        # у FailedUserDetails по спеке плюральный user_ids (список)
+        details = response.get("failed_user_details") or []
+        failed = response.get("failed_user_ids") or [
+            uid for detail in details for uid in detail.get("user_ids") or []
+        ]
+        if failed:
+            codes = sorted({
+                detail.get("error_code")
+                for detail in details if detail.get("error_code")
+            })
+            logger.warning(
+                "add_chat_members: не удалось добавить пользователей %s (%s)",
+                failed,
+                ", ".join(codes) if codes
+                else "например, настройки приватности не позволяют",
+            )
+        return bool(response.get("success", False)) and not failed
 
     def callback_query_handler(self, data=None, **kwargs):
         """

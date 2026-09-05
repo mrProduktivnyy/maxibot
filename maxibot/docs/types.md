@@ -53,6 +53,17 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **message_id** (`str`) - Идентификатор сообщения  
 * **from_user** (`maxibot.types.User`) - Пользователь, отправивший сообщение  
 * **chat** (`maxibot.types.ChatLink`) - Объект чата, в котором отправлено сообщение  
+## class maxibot.types.ChatMember(member: Dict[str, Any], status: Optional[str])
+Участник чата — результат get_chat_member, get_chat_administrators и get_chat_membership; собирается из объекта ChatMember MAX (GET /chats/{chatId}/members)  
+**Параметры:**
+* **status** (`str`) - Телеботовский статус: 'creator' (владелец), 'administrator', 'member'; 'left' — пользователя в чате нет  
+* **user** (`User`) - Пользователь; здесь user.id — НАСТОЯЩИЙ id пользователя (в отличие от message.from_user.id, где исторически id чата)  
+* **custom_title** (`str`) - Титул админа (alias MAX)  
+* **can_change_info, can_pin_messages, can_invite_users, can_restrict_members, can_promote_members, can_post_messages, can_edit_messages, can_delete_messages, can_manage_video_chats** (`bool`) - Флаги из прав MAX (add_remove_members взводит и can_invite_users, и can_restrict_members); у владельца все True, у обычного участника — None, как в telebot  
+* **can_manage_chat** (`bool`) - У админа и владельца всегда True (телеграмный инвариант «implied by any other administrator privilege»)  
+* **is_member** (`bool`) - False только у заглушки 'left'  
+
+Остальные атрибуты telebot.types.ChatMember существуют и равны None (until_date, is_anonymous, can_send_* и т.п.). Дополнительно сырые поля MAX: is_owner, is_admin, permissions (список прав как пришёл — в нём видны edit_link и view_stats, телеботовских флагов для них нет), alias, last_access_time, join_time, description (описание профиля), avatar_url, full_avatar_url  
 ## class maxibot.types.ChatLink(update: Dict[str, Any])
 Класс сериализации и работы с объектом чата в пересланном сообщении  
 **Параметры:**

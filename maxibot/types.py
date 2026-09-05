@@ -840,6 +840,126 @@ class Chat(JsonDeserializable):
         return chat
 
 
+class ChatMember(JsonDeserializable):
+    """
+    Класс участника чата — результат bot.get_chat_member,
+    bot.get_chat_administrators и bot.get_chat_membership. Собирается
+    из объекта ChatMember MAX (GET /chats/{chatId}/members).
+
+    Поля как в telebot: status ('creator' у владельца, 'administrator'
+    у админа, иначе 'member'; 'left' — если пользователя нет в чате),
+    user (телеботовский User; здесь user.id — НАСТОЯЩИЙ id
+    пользователя, в отличие от message.from_user.id, где исторически
+    лежит id чата), custom_title (alias админа), is_member и can_*-флаги,
+    собранные из прав MAX. Все остальные атрибуты telebot.types.ChatMember
+    существуют и равны None. Дополнительно сырые поля MAX:
+    is_owner, is_admin, permissions (список прав как пришёл),
+    alias, last_access_time, join_time, description (описание профиля),
+    avatar_url, full_avatar_url.
+
+    :param member: Объект ChatMember из ответа MAX API
+    :type member: Dict[str, Any]
+
+    :param status: Готовый телеботовский статус — используется для
+        заглушки 'left', когда пользователя в чате нет
+    :type status: Optional[str]
+    """
+
+    # атрибуты telebot.types.ChatMember 4.15.4 — существуют всегда,
+    # чтобы перенесённый код не падал с AttributeError (прецедент —
+    # Chat._TELEBOT_ATTRIBUTES)
+    _TELEBOT_ATTRIBUTES = (
+        "user", "status", "custom_title", "is_anonymous", "can_be_edited",
+        "can_post_messages", "can_edit_messages", "can_delete_messages",
+        "can_restrict_members", "can_promote_members", "can_change_info",
+        "can_invite_users", "can_pin_messages", "is_member",
+        "can_send_messages", "can_send_audios", "can_send_documents",
+        "can_send_photos", "can_send_videos", "can_send_video_notes",
+        "can_send_voice_notes", "can_send_polls", "can_send_other_messages",
+        "can_add_web_page_previews", "can_manage_chat",
+        "can_manage_video_chats", "until_date", "can_manage_topics",
+        "can_post_stories", "can_edit_stories", "can_delete_stories",
+    )
+
+    # права MAX (enum ChatAdminPermission) -> телеботовские can_*-флаги.
+    # add_remove_members закрывает и приглашения, и удаления, поэтому
+    # взводит оба флага; у edit_link и view_stats телеботовского флага
+    # нет — они видны только в сыром .permissions
+    _PERMISSION_FLAGS = {
+        "change_chat_info": ("can_change_info",),
+        "pin_message": ("can_pin_messages",),
+        "add_remove_members": ("can_invite_users", "can_restrict_members"),
+        "add_admins": ("can_promote_members",),
+        "write": ("can_post_messages",),
+        "edit": ("can_edit_messages",),
+        "delete": ("can_delete_messages",),
+        "can_call": ("can_manage_video_chats",),
+    }
+
+    def __init__(self, member: Dict[str, Any], status: Optional[str] = None):
+        member = member if isinstance(member, dict) else {}
+        # сначала все телеботовские атрибуты None, реальные значения
+        # перекрывают их ниже
+        for attribute in self._TELEBOT_ATTRIBUTES:
+            setattr(self, attribute, None)
+
+        # телеботовский User: id здесь — настоящий id пользователя
+        # (сравнения вида member.user.id == user_id работают)
+        user = User.__new__(User)
+        user.id = member.get("user_id")
+        user.real_id = member.get("user_id")
+        user.is_bot = member.get("is_bot")
+        user.first_name = member.get("first_name")
+        user.last_name = member.get("last_name")
+        # в объектах участников MAX публичный username; в обновлениях
+        # вместо него display-имя name — берём что есть
+        user.username = member.get("username") or member.get("name")
+        user.language_code = None
+        self.user = user
+
+        if status is not None:
+            self.status = status
+        elif member.get("is_owner"):
+            self.status = "creator"
+        elif member.get("is_admin"):
+            self.status = "administrator"
+        else:
+            self.status = "member"
+
+        self.is_member = self.status != "left"
+        self.custom_title = member.get("alias")
+
+        if self.status == "creator":
+            # владелец может всё — как в Telegram, где у creator нет
+            # ограничений; permissions MAX у него может быть и null
+            for flags in self._PERMISSION_FLAGS.values():
+                for flag in flags:
+                    setattr(self, flag, True)
+            self.can_manage_chat = True
+        elif self.status == "administrator":
+            # у админа флаги честные: True по правам MAX, False — нет права
+            for flags in self._PERMISSION_FLAGS.values():
+                for flag in flags:
+                    setattr(self, flag, False)
+            for permission in member.get("permissions") or []:
+                for flag in self._PERMISSION_FLAGS.get(permission, ()):
+                    setattr(self, flag, True)
+            # телеграмный инвариант: у администратора can_manage_chat
+            # всегда True («implied by any other administrator privilege»)
+            self.can_manage_chat = True
+
+        # сырые поля MAX без телеботовских аналогов
+        self.is_owner = member.get("is_owner")
+        self.is_admin = member.get("is_admin")
+        self.permissions = member.get("permissions")
+        self.alias = member.get("alias")
+        self.last_access_time = member.get("last_access_time")
+        self.join_time = member.get("join_time")
+        self.description = member.get("description")
+        self.avatar_url = member.get("avatar_url")
+        self.full_avatar_url = member.get("full_avatar_url")
+
+
 class ChatLink(JsonDeserializable):
     """
     Класс ссылки на чат
