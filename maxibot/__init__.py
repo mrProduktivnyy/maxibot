@@ -1548,6 +1548,115 @@ class MaxiBot:
             reply_parameters=reply_parameters,
         )
 
+    def send_sticker(
+        self,
+        chat_id: Union[int, str],
+        sticker: Union[Any, str],
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_notification: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        data: Union[Any, str] = None,
+        message_thread_id: Optional[int] = None,
+        emoji: Optional[str] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет стикер. Сигнатура один в один с telebot.send_sticker;
+        в MAX это POST /messages со вложением
+        {"type": "sticker", "payload": {"code": ...}}.
+
+        Отличие от telebot: параметр sticker — это строка-КОД стикера
+        MAX (аналог file_id; код лежит во входящем вложении
+        payload.code, когда пользователь присылает стикер). Свои
+        webp/tgs-файлы загрузить нельзя — типа sticker в POST /uploads
+        нет, поэтому файл, байты или URL вместо кода — ValueError
+        с объяснением. Пользуйтесь стикерами из каталога MAX.
+
+        По документации MAX стикер обязан быть ЕДИНСТВЕННЫМ вложением
+        сообщения, поэтому переданный reply_markup игнорируется
+        с предупреждением в логгере (в telebot клавиатуру к стикеру
+        приложить можно) — отправьте её отдельным сообщением.
+
+        emoji, allow_sending_without_reply, protect_content и
+        message_thread_id принимаются для совместимости и игнорируются.
+        У возвращаемого Message content_type — "sticker", как в telebot,
+        но атрибут sticker остаётся None.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param sticker: Код стикера MAX (payload.code входящего
+            стикера). Файл/байты/URL не поддерживаются — ValueError
+        :type sticker: Union[Any, str]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Игнорируется — стикер в MAX обязан быть
+            единственным вложением
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param disable_notification: True — отправить без звука
+        :type disable_notification: Optional[bool]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :param data: Устаревший алиас sticker — как в telebot,
+            используется с предупреждением, если sticker не передан
+        :type data: Union[Any, str]
+
+        :param emoji: Принимается для совместимости и игнорируется —
+            эмодзи к стикеру в MAX не прикладывается
+        :type emoji: Optional[str]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id
+        :type reply_parameters: Optional[Any]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        if data and not sticker:
+            # как в telebot: data — устаревший алиас sticker
+            logger.warning(
+                'send_sticker: параметр "data" устарел, используйте "sticker"'
+            )
+            sticker = data
+        if not isinstance(sticker, str) or not sticker:
+            raise ValueError(
+                "send_sticker: sticker должен быть строкой-кодом стикера MAX "
+                "(payload.code входящего стикера). Свои файлы загрузить "
+                "нельзя — типа sticker в POST /uploads нет, пользуйтесь "
+                "стикерами из каталога MAX"
+            )
+        if sticker.startswith(("http://", "https://")):
+            raise ValueError(
+                "send_sticker: URL не поддерживается — sticker должен быть "
+                "строкой-кодом стикера MAX (payload.code входящего стикера)"
+            )
+        if reply_markup is not None:
+            logger.warning(
+                "send_sticker: по документации MAX стикер обязан быть "
+                "единственным вложением сообщения — reply_markup "
+                "игнорируется, отправьте клавиатуру отдельным сообщением"
+            )
+        reply_to_message_id = self._resolve_reply_target(
+            reply_to_message_id, reply_parameters, "send_sticker"
+        )
+        return self.send_message(
+            chat_id,
+            None,
+            attachments=[{"type": "sticker", "payload": {"code": sticker}}],
+            notify=not disable_notification,
+            reply_to_message_id=reply_to_message_id,
+            timeout=timeout,
+        )
+
     def forward_message(
         self,
         chat_id: Union[int, str],
