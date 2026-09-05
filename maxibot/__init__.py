@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 
 from maxibot import apihelper, util
 from maxibot.apihelper import Api
-from maxibot.types import Message, CallbackQuery, InputMedia, Update
+from maxibot.types import Message, CallbackQuery, InputMedia, MessageID, Update
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.exceptions import (
@@ -1547,6 +1547,343 @@ class MaxiBot:
             timeout=timeout,
             reply_parameters=reply_parameters,
         )
+
+    def forward_message(
+        self,
+        chat_id: Union[int, str],
+        from_chat_id: Union[int, str],
+        message_id: Union[int, str],
+        disable_notification: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+    ) -> Message:
+        """
+        Пересылает сообщение. Сигнатура один в один с
+        telebot.forward_message; в MAX пересылка встроена в отправку —
+        POST /messages с link={"type": "forward", "mid": message_id}
+        (само тело пустое: без текста и вложений).
+
+        Идентификатор сообщения (mid) в MAX глобален, поэтому
+        from_chat_id принимается для совместимости и не используется —
+        сообщение находится по одному message_id. protect_content и
+        message_thread_id принимаются и игнорируются.
+
+        :param chat_id: Чат, куда переслать
+        :type chat_id: Union[int, str]
+
+        :param from_chat_id: Принимается для совместимости с telebot
+            и не используется — mid в MAX глобален
+        :type from_chat_id: Union[int, str]
+
+        :param message_id: Идентификатор пересылаемого сообщения (mid)
+        :type message_id: Union[int, str]
+
+        :param disable_notification: True — переслать без звука
+        :type disable_notification: Optional[bool]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :return: Отправленное сообщение-пересылка
+        :rtype: Message
+        """
+        if isinstance(chat_id, int):
+            chat_id = str(chat_id)
+        response = self.api.send_message(
+            chat_id=chat_id,
+            text=None,
+            attachments=None,
+            parse_mode=None,
+            notify=not disable_notification,
+            link={"type": "forward", "mid": message_id},
+            # как в telebot: timeout=0 означает «без своего таймаута»
+            timeout=timeout or None,
+        )
+        return Message(update=response, api=self.api)
+
+    def forward_messages(
+        self,
+        chat_id: Union[str, int],
+        from_chat_id: Union[str, int],
+        message_ids: List[Union[int, str]],
+        disable_notification: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        protect_content: Optional[bool] = None,
+    ) -> List[MessageID]:
+        """
+        Пересылает несколько сообщений: цикл forward_message по
+        message_ids. Как в telebot, сообщения, которые переслать не
+        удалось (например, не найдены), пропускаются с предупреждением
+        в логгере — возвращается список успешно пересланных.
+
+        :param message_ids: Идентификаторы пересылаемых сообщений
+        :type message_ids: List[Union[int, str]]
+
+        :return: Список MessageID пересланных сообщений
+        :rtype: List[MessageID]
+        """
+        result = []
+        for message_id in message_ids:
+            try:
+                message = self.forward_message(
+                    chat_id, from_chat_id, message_id,
+                    disable_notification=disable_notification,
+                )
+            except MaxApiException as e:
+                logger.warning(
+                    "forward_messages: сообщение %s пропущено: %s", message_id, e
+                )
+                continue
+            result.append(MessageID(getattr(message, "message_id", None)))
+        return result
+
+    @staticmethod
+    def _rebuild_attachments(attachments):
+        """
+        Пересобирает вложения полученного сообщения в форму отправки
+        (для copy_message): медиа — по token (задокументированный в MAX
+        способ переиспользовать вложение в другом сообщении), стикер —
+        по code, локация — по координатам, контакт — по vcf_info и
+        max_info. Клавиатура исходного сообщения не копируется (как у
+        copyMessage в telebot), share-превью MAX построит заново по
+        тексту; вложения без токена пропускаются.
+        """
+        rebuilt = []
+        for attachment in attachments:
+            a_type = attachment.get("type")
+            payload = attachment.get("payload") or {}
+            if a_type in ("image", "video", "audio", "file"):
+                token = payload.get("token")
+                if token:
+                    rebuilt.append({"type": a_type, "payload": {"token": token}})
+            elif a_type == "sticker":
+                code = payload.get("code")
+                if code:
+                    rebuilt.append({"type": "sticker", "payload": {"code": code}})
+            elif a_type == "location":
+                rebuilt.append({
+                    "type": "location",
+                    "latitude": attachment.get("latitude"),
+                    "longitude": attachment.get("longitude"),
+                })
+            elif a_type == "contact":
+                max_info = payload.get("max_info") or {}
+                name = max_info.get("name")
+                if not name:
+                    # по спеке у User нет name — только first_name/last_name
+                    name = " ".join(filter(None, [
+                        max_info.get("first_name"), max_info.get("last_name"),
+                    ])) or None
+                contact_payload = {"name": name}
+                if max_info.get("user_id"):
+                    contact_payload["contact_id"] = max_info.get("user_id")
+                if payload.get("vcf_info"):
+                    contact_payload["vcf_info"] = payload.get("vcf_info")
+                rebuilt.append({"type": "contact", "payload": contact_payload})
+            # inline_keyboard и share сознательно пропускаются
+        return rebuilt
+
+    def _copy_message(self, chat_id, message_id, caption=None, parse_mode=None,
+                      disable_notification=None, reply_to_message_id=None,
+                      reply_markup=None, timeout=None, remove_caption=False):
+        """
+        Общий путь copy_message/copy_messages: GET /messages/{messageId},
+        пересборка вложений и новый POST /messages. Возвращает MessageID
+        нового сообщения.
+        """
+        info = self.api.get_message(msg_id=message_id)
+        msg = {}
+        if isinstance(info, dict):
+            msg = info.get("message") or info
+        body = msg.get("body") or {}
+        # у чистой пересылки собственное body пустое (по спеке может быть
+        # и null) — видимый контент лежит в link.message; пересылка
+        # с комментарием копируется как комментарий (текст body)
+        link_info = msg.get("link") or {}
+        if (link_info.get("type") == "forward"
+                and not body.get("text") and not body.get("attachments")):
+            body = link_info.get("message") or body
+        rebuilt = self._rebuild_attachments(body.get("attachments") or [])
+        attachments = list(rebuilt)
+        if reply_markup:
+            must_be_alone = {"audio", "file", "contact", "sticker"}
+            alone_type = next((a.get("type") for a in rebuilt
+                               if a.get("type") in must_be_alone), None)
+            if alone_type:
+                logger.warning(
+                    "copy_message: вложение «%s» по документации MAX обязано "
+                    "быть единственным вложением сообщения — reply_markup "
+                    "игнорируется, отправьте клавиатуру отдельным сообщением",
+                    alone_type,
+                )
+            elif hasattr(reply_markup, 'to_attachment'):
+                attachments.append(reply_markup.to_attachment())
+            else:
+                attachments.append(reply_markup)
+        if remove_caption:
+            # как в telebot: снимается только подпись медиа — текст чисто
+            # текстового сообщения сохраняется
+            text = None if rebuilt else body.get("text")
+        elif caption is not None:
+            text = caption
+        else:
+            text = body.get("text")
+        # формат — только для НОВОЙ подписи; исходный текст уходит как есть,
+        # без повторной разметки (исходное оформление не переносится)
+        resolved_parse_mode = None
+        if caption is not None and not remove_caption:
+            resolved_parse_mode = self._resolve_parse_mode(parse_mode)
+        link = None
+        if reply_to_message_id:
+            link = {"type": "reply", "mid": reply_to_message_id}
+        if isinstance(chat_id, int):
+            chat_id = str(chat_id)
+        response = self.api.send_message(
+            chat_id=chat_id,
+            text=text,
+            attachments=attachments,
+            parse_mode=resolved_parse_mode,
+            notify=not disable_notification,
+            link=link,
+            timeout=timeout or None,
+        )
+        new_message_id = None
+        if isinstance(response, dict):
+            new_message_id = ((response.get("message") or {}).get("body") or {}).get("mid")
+        return MessageID(new_message_id)
+
+    def copy_message(
+        self,
+        chat_id: Union[int, str],
+        from_chat_id: Union[int, str],
+        message_id: Union[int, str],
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        caption_entities: Optional[Any] = None,
+        disable_notification: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        reply_to_message_id: Optional[int] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        timeout: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> MessageID:
+        """
+        Копирует сообщение без ссылки на оригинал (в отличие от
+        forward_message). Сигнатура один в один с telebot.copy_message.
+        Своего copyMessage в MAX нет — честная эмуляция:
+        GET /messages/{messageId}, затем новый POST /messages с тем же
+        текстом и пересобранными вложениями (медиа — по token, стикер —
+        по code, локация — по координатам, контакт — по vcf_info).
+
+        Копия сообщения-пересылки: у чистой пересылки собственное тело
+        пустое, поэтому копируется видимый контент оригинала (из
+        link.message); у пересылки с комментарием копируется комментарий.
+
+        Отличия от telebot: клавиатура оригинала не копируется (как и в
+        telebot) — новую можно передать в reply_markup, но если копия —
+        это аудио, файл, стикер или контакт, MAX требует, чтобы вложение
+        было единственным, и reply_markup игнорируется
+        с предупреждением; исходное оформление текста (разметка) не
+        переносится — текст уходит как есть; parse_mode применяется
+        только к НОВОЙ подписи caption. from_chat_id принимается для
+        совместимости и не используется — mid в MAX глобален.
+        caption_entities, allow_sending_without_reply, protect_content
+        и message_thread_id принимаются и игнорируются.
+
+        :param chat_id: Чат, куда скопировать
+        :type chat_id: Union[int, str]
+
+        :param from_chat_id: Принимается для совместимости и не
+            используется — mid в MAX глобален
+        :type from_chat_id: Union[int, str]
+
+        :param message_id: Идентификатор копируемого сообщения (mid)
+        :type message_id: Union[int, str]
+
+        :param caption: Новый текст вместо исходного
+        :type caption: Optional[str]
+
+        :param parse_mode: Разметка НОВОГО текста caption; исходный
+            текст уходит без разметки
+        :type parse_mode: Optional[str]
+
+        :param disable_notification: True — отправить без звука
+        :type disable_notification: Optional[bool]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Клавиатура нового сообщения
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id
+        :type reply_parameters: Optional[Any]
+
+        :return: Идентификатор нового сообщения
+        :rtype: MessageID
+        """
+        return self._copy_message(
+            chat_id,
+            message_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            disable_notification=disable_notification,
+            reply_to_message_id=self._resolve_reply_target(
+                reply_to_message_id, reply_parameters, "copy_message"
+            ),
+            reply_markup=reply_markup,
+            timeout=timeout,
+        )
+
+    def copy_messages(
+        self,
+        chat_id: Union[str, int],
+        from_chat_id: Union[str, int],
+        message_ids: List[Union[int, str]],
+        disable_notification: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        protect_content: Optional[bool] = None,
+        remove_caption: Optional[bool] = None,
+    ) -> List[MessageID]:
+        """
+        Копирует несколько сообщений: цикл copy_message по message_ids.
+        Как в telebot, сообщения, которые скопировать не удалось,
+        пропускаются с предупреждением в логгере.
+
+        :param message_ids: Идентификаторы копируемых сообщений
+        :type message_ids: List[Union[int, str]]
+
+        :param remove_caption: True — копировать медиа без подписи; как
+            в telebot, снимается только подпись у сообщений
+            с вложениями — чисто текстовые копируются с текстом
+        :type remove_caption: Optional[bool]
+
+        :return: Список MessageID новых сообщений
+        :rtype: List[MessageID]
+        """
+        result = []
+        for message_id in message_ids:
+            try:
+                result.append(self._copy_message(
+                    chat_id,
+                    message_id,
+                    disable_notification=disable_notification,
+                    remove_caption=bool(remove_caption),
+                ))
+            except MaxApiException as e:
+                logger.warning(
+                    "copy_messages: сообщение %s пропущено: %s", message_id, e
+                )
+                continue
+        return result
 
     def delete_message(
         self,

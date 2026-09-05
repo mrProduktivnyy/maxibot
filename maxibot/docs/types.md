@@ -36,6 +36,10 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **parse_mode** (`str`) - Тип форматирования описания отправляемого медиавложения  
 
 Подклассы с зафиксированным типом, как в telebot: `InputMediaPhoto(media, caption, parse_mode)`, `InputMediaVideo(...)`, `InputMediaAudio(...)` (у видео и аудио токен приходит сразу в ответе POST /uploads)  
+## class maxibot.types.MessageID(message_id)
+Идентификатор сообщения — аналог `telebot.types.MessageID`; его возвращают copy_message, forward_messages и copy_messages  
+**Параметры:**
+* **message_id** (`str`) - Идентификатор сообщения (mid в MAX — строка, в отличие от телеграмного int)  
 ## class maxibot.types.Photo(update: Dict[str, Any])
 Класс сериализации и работы с фотографиями во вложениях  
 **Параметры:**

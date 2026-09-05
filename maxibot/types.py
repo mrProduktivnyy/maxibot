@@ -768,7 +768,9 @@ class Photo(JsonDeserializable):
     """
 
     def __init__(self, update: Dict[str, Any]):
-        attach = update.get("message", {}).get("body", {}).get("attachments", None)
+        # body по спеке может быть null (сообщение-пересылка без комментария) —
+        # цепочка .get(..., {}) от явного null не защищает
+        attach = ((update.get("message") or {}).get("body") or {}).get("attachments")
         if attach:
             for att in attach:
                 if att.get("type") == "image":
@@ -943,6 +945,20 @@ class InputMediaAudio(InputMedia, JsonDeserializable):
 
     def __init__(self, media=None, caption=None, parse_mode=None):
         super().__init__(type="audio", media=media, caption=caption, parse_mode=parse_mode)
+
+
+class MessageID(JsonDeserializable):
+    """
+    Идентификатор сообщения — аналог telebot.types.MessageID
+    (его возвращают copy_message, forward_messages и copy_messages).
+
+    :param message_id: Идентификатор сообщения (mid в MAX — строка,
+        в отличие от телеграмного int)
+    :type message_id: str
+    """
+
+    def __init__(self, message_id):
+        self.message_id = message_id
 
 
 class Message(JsonDeserializable):
