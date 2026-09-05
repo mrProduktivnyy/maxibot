@@ -249,6 +249,7 @@ class MaxiBot:
         else:
             self._worker_pool = None
         self.message_handlers = []
+        self.edited_message_handlers = []
         self.callback_query_handlers = []
         # middleware (см. middleware_handler): по типам обновлений MAX и общие.
         # Как в telebot, регистрация требует apihelper.ENABLE_MIDDLEWARE = True
@@ -268,16 +269,19 @@ class MaxiBot:
         self._next_steps: Dict[int, StepHandler] = {}
 
     @staticmethod
-    def _build_handler_dict(handler: HandlerFunc, **filters):
+    def _build_handler_dict(handler: HandlerFunc, pass_bot=False, **filters):
         """
         Функция, которая формирует словарь для добавления в список обработчиков событий (handler)
 
         :param handler: Description
         :type handler: HandlerFunc
+        :param pass_bot: Передавать ли обработчику бота именованным
+            аргументом bot (как в telebot register_*_handler)
         :param filters: Description
         """
         return {
             'function': handler,
+            'pass_bot': pass_bot,
             'filters': {ftype: fvalue for ftype, fvalue in filters.items() if fvalue is not None}
         }
 
@@ -417,6 +421,50 @@ class MaxiBot:
         )
         await self.poll.loop(self._process_update)
 
+    @staticmethod
+    def _prepare_message_filters(content_types, commands, default_text=True):
+        """
+        Общая нормализация фильтров message_handler /
+        edited_message_handler: дефолт ['text'], строки оборачиваются
+        в списки, сырые имена вложений MAX переводятся в имена telebot,
+        по не порождаемым в MAX типам — предупреждение.
+
+        default_text=False — не подставлять ['text'] при content_types
+        is None: так ведут себя телеботовские register_*_handler
+        (в отличие от одноимённых декораторов — внутренняя
+        непоследовательность telebot, повторяем её ради переносимости)
+
+        :return: (content_types, commands)
+        """
+        if content_types is None:
+            # как в telebot: без явных content_types обработчик-декоратор
+            # получает только текстовые сообщения
+            if default_text:
+                content_types = ["text"]
+        elif isinstance(content_types, str):
+            logger.warning("content_types должен быть списком, обернул строку")
+            content_types = [content_types]
+        renamed = {name: telebot_name for name, telebot_name
+                   in Message._CONTENT_TYPE_MAP.items() if name in (content_types or ())}
+        if renamed:
+            # сырые имена вложений MAX из старых ботов ('file', 'image')
+            logger.warning("content_types: используйте имена telebot: %s", renamed)
+            content_types = [Message._CONTENT_TYPE_MAP.get(name, name) for name in content_types]
+        hinted = {name: real for name, real in _CONTENT_TYPE_HINTS.items()
+                  if name in (content_types or ())}
+        if hinted:
+            # тип не переименовывается: 'voice' ловил бы ВСЕ аудио — пусть
+            # автор бота осознанно подпишется на реальный тип сам
+            logger.warning(
+                "content_types: MAX не порождает %s — такие сообщения приходят "
+                "как %s, хендлер с этим content_type не сработает",
+                sorted(hinted), sorted(set(hinted.values())),
+            )
+        if isinstance(commands, str):
+            logger.warning("commands должен быть списком, обернул строку")
+            commands = [commands]
+        return content_types, commands
+
     def message_handler(
         self,
         commands: Optional[List[str]] = None,
@@ -431,32 +479,7 @@ class MaxiBot:
         :param pattern: Шаблон текста (точное совпадение или регулярное выражение)
         :type pattern: str
         """
-        if content_types is None:
-            # как в telebot: без явных content_types обработчик получает
-            # только текстовые сообщения
-            content_types = ["text"]
-        elif isinstance(content_types, str):
-            logger.warning("content_types должен быть списком, обернул строку")
-            content_types = [content_types]
-        renamed = {name: telebot_name for name, telebot_name
-                   in Message._CONTENT_TYPE_MAP.items() if name in content_types}
-        if renamed:
-            # сырые имена вложений MAX из старых ботов ('file', 'image')
-            logger.warning("content_types: используйте имена telebot: %s", renamed)
-            content_types = [Message._CONTENT_TYPE_MAP.get(name, name) for name in content_types]
-        hinted = {name: real for name, real in _CONTENT_TYPE_HINTS.items()
-                  if name in content_types}
-        if hinted:
-            # тип не переименовывается: 'voice' ловил бы ВСЕ аудио — пусть
-            # автор бота осознанно подпишется на реальный тип сам
-            logger.warning(
-                "content_types: MAX не порождает %s — такие сообщения приходят "
-                "как %s, хендлер с этим content_type не сработает",
-                sorted(hinted), sorted(set(hinted.values())),
-            )
-        if isinstance(commands, str):
-            logger.warning("commands должен быть списком, обернул строку")
-            commands = [commands]
+        content_types, commands = self._prepare_message_filters(content_types, commands)
 
         def decorator(funcs: HandlerFunc):
             # порядок фильтров = порядок проверки; как в telebot, content_types
@@ -472,6 +495,102 @@ class MaxiBot:
             self.message_handlers.append(handler_dict)
             return funcs
         return decorator
+
+    def edited_message_handler(
+        self,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        content_types: Optional[List[str]] = None,
+        chat_types: Optional[List[str]] = None
+    ):
+        """
+        Декоратор для регистрации обработчика ПРАВОК сообщений
+        (message_edited) — как telebot.edited_message_handler. Фильтры
+        те же, что у message_handler: без content_types обработчик
+        получает только текстовые правки; commands/regexp применимы
+        к тексту.
+
+        Обработчик получает Message отредактированного сообщения —
+        как в telebot, где приходит обновлённый message.
+
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param content_types: Типы контента (по умолчанию ['text'])
+        :param chat_types: Типы чатов — сырые имена MAX
+            ('dialog'/'chat'/'channel'), как и у message_handler;
+            телеботовские 'private'/'group' не совпадут
+        """
+        content_types, commands = self._prepare_message_filters(content_types, commands)
+
+        def decorator(funcs: HandlerFunc):
+            handler_dict = self._build_handler_dict(
+                funcs,
+                chat_types=chat_types,
+                content_types=content_types,
+                commands=commands,
+                regexp=regexp,
+                func=func
+            )
+            self.add_edited_message_handler(handler_dict)
+            return funcs
+        return decorator
+
+    def add_edited_message_handler(self, handler_dict):
+        """
+        Добавляет обработчик правок сообщений напрямую (низкоуровневый
+        способ — как telebot.add_edited_message_handler; обычно
+        используйте декоратор или register_edited_message_handler)
+
+        :param handler_dict: Словарь из _build_handler_dict
+        """
+        self.edited_message_handlers.append(handler_dict)
+
+    def register_edited_message_handler(
+        self,
+        callback: Callable,
+        content_types: Optional[List[str]] = None,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        chat_types: Optional[List[str]] = None,
+        pass_bot: Optional[bool] = False
+    ):
+        """
+        Недекораторная регистрация обработчика правок сообщений — как
+        telebot.register_edited_message_handler (удобно, когда
+        обработчики разнесены по файлам). С pass_bot=True обработчик
+        получает бота именованным аргументом:
+        callback(message, bot=bot).
+
+        Как и в telebot, без content_types регистрация через register_
+        матчит правки ЛЮБОГО типа контента (телеботовские register_,
+        в отличие от одноимённых декораторов, дефолт ['text']
+        не подставляют — повторяем ради переносимости).
+
+        :param callback: Функция-обработчик
+        :param content_types: Типы контента (None — все, как в telebot)
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param chat_types: Типы чатов — сырые имена MAX
+            ('dialog'/'chat'/'channel'); телеботовские
+            'private'/'group' не совпадут
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        """
+        content_types, commands = self._prepare_message_filters(
+            content_types, commands, default_text=False)
+        handler_dict = self._build_handler_dict(
+            callback,
+            pass_bot=pass_bot,
+            chat_types=chat_types,
+            content_types=content_types,
+            commands=commands,
+            regexp=regexp,
+            func=func
+        )
+        self.add_edited_message_handler(handler_dict)
 
     def middleware_handler(self, update_types: Optional[List[str]] = None):
         """
@@ -621,7 +740,12 @@ class MaxiBot:
         """
         for handler in message_handlers:
             if self._check_filters(context=context, handler=handler):
-                self._exec_task(handler.get("function"), context)
+                if handler.get("pass_bot"):
+                    # как в telebot: register_*_handler(pass_bot=True)
+                    # передаёт бота именованным аргументом
+                    self._exec_task(handler.get("function"), context, bot=self)
+                else:
+                    self._exec_task(handler.get("function"), context)
                 break
 
     def _test_filter(self, message_filter: str, filter_value: List, context: Message):
@@ -770,6 +894,10 @@ class MaxiBot:
             update_type = update.get("update_type")
             has_handlers = update_type in (
                 UpdateType.MESSAGE_CREATED, UpdateType.BOT_STARTED, UpdateType.BOT_ADDED, UpdateType.MESSAGE_CALLBACK
+            ) or (
+                # правки диспатчатся только при подписке: без обработчиков
+                # не строим Message зря (он ходит в API за названием чата)
+                update_type == UpdateType.MESSAGE_EDITED and bool(self.edited_message_handlers)
             )
             if not has_handlers and not (
                 self.default_middleware_handlers or self.typed_middleware_handlers.get(update_type)
@@ -789,6 +917,11 @@ class MaxiBot:
                     self._exec_task(handler.callback, upd.message, *handler.args, **handler.kwargs)
                 else:
                     self._process_text_message(upd.message)
+            elif upd.edited_message is not None:
+                self.run_handler(
+                    context=upd.edited_message,
+                    message_handlers=self.edited_message_handlers,
+                )
             elif upd.callback_query is not None:
                 self._process_callback_query(upd.callback_query)
         except Exception as e:
@@ -4369,7 +4502,11 @@ class MaxiBot:
             # print(f"Checking handler with filters: {handler['filters']}")
             if self._check_filters(callback, handler):
                 # print("Handler matched! Calling function...")
-                self._exec_task(handler["function"], callback)
+                if handler.get("pass_bot"):
+                    # как в telebot: callback_query_handler(pass_bot=True)
+                    self._exec_task(handler["function"], callback, bot=self)
+                else:
+                    self._exec_task(handler["function"], callback)
                 break
         else:
             logger.debug("No matching handler found for callback")

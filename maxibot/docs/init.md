@@ -13,8 +13,9 @@
 * **num_threads** (`int`) - Размер пула потоков (по умолчанию 2, как в telebot)  
 * **exception_handler** (`ExceptionHandler`) - Обработчик ошибок с методом `handle(exception) -> bool`; передавайте по имени (в telebot перед ним стоят next_step_backend и reply_backend, которых в maxibot нет). Можно назначить и позже: `bot.exception_handler = ...`  
 **Методы:**
-* **_build_handler_dict** (`handler` `**filters`) - Метод, которая формирует словарь для добавления в список обработчиков событий (handler)  
+* **_build_handler_dict** (`handler`, `pass_bot`, `**filters`) - Метод, которая формирует словарь для добавления в список обработчиков событий (handler)  
     * **handler** - Функция-обработчик события  
+    * **pass_bot** - Передавать ли обработчику бота именованным аргументом bot (как в telebot)  
     * ****filters** - Фильтры для функции-обработчика событий  
 * **polling** (`allowed_updates`) - Метод, который запускает корутину полинга событий  
 * **start** (`allowed_updates`) - Метод, который запускает полинга событий по разрешённым событиям `allowed_updates` в ассинхронном режиме  
@@ -24,6 +25,8 @@
     * **regexp** - фильр по регулярным выражениям
     * **func** - фильр по функции
     * **content_types** - фильр по типу контента
+* **edited_message_handler** (`commands`, `regexp`, `func`, `content_types`, `chat_types`) - Декоратор обработчика ПРАВОК сообщений (message_edited) — как в telebot: фильтры те же, что у message_handler (по умолчанию только текст), обработчик получает обновлённый Message. Без подписки правки, как и раньше, не обрабатываются. chat_types — сырые имена MAX (dialog/chat/channel)  
+* **add_edited_message_handler** (`handler_dict`) / **register_edited_message_handler** (`callback`, `content_types`, `commands`, `regexp`, `func`, `chat_types`, `pass_bot`) - Недекораторная регистрация обработчика правок; pass_bot=True — обработчик получает бота именованным аргументом bot (как в telebot). Без content_types register_ матчит правки любого типа — как в telebot, где register_, в отличие от декораторов, дефолт ['text'] не подставляет  
 * **run_handler** (`context`, `message_handlers`) - Метод запуска обработчиков событий текстового сообщения  
     * **context** - Объект типа `Message`  
     * **message_handlers** - Список обработчиков событий  
