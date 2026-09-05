@@ -348,6 +348,57 @@ class Api:
             "GET", f"/chats/{chat_id}/members/me", timeout=timeout
         )
 
+    def get_pinned_message(self, chat_id, timeout=None):
+        """
+        Апи метод получения закреплённого сообщения чата
+        (GET /chats/{chatId}/pin).
+
+        :param chat_id: Идентификатор чата
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"message": Message | null})
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "GET", f"/chats/{chat_id}/pin", timeout=timeout
+        )
+
+    def pin_message(self, chat_id, message_id, notify=None, timeout=None):
+        """
+        Апи метод закрепления сообщения в чате
+        (PUT /chats/{chatId}/pin). Закреп в MAX один на чат — новый
+        вытесняет старый. Боту нужно право pin_message.
+
+        :param chat_id: Идентификатор чата
+        :param message_id: Идентификатор (mid) закрепляемого сообщения
+        :param notify: Уведомлять ли участников системным сообщением;
+            None — серверный default (true)
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"success": bool, "message": str})
+        :rtype: Dict[str: Any]
+        """
+        data = {"message_id": message_id}
+        if notify is not None:
+            data["notify"] = bool(notify)
+        return self.client.request(
+            "PUT", f"/chats/{chat_id}/pin", data=data, timeout=timeout
+        )
+
+    def unpin_message(self, chat_id, timeout=None):
+        """
+        Апи метод снятия закрепа в чате (DELETE /chats/{chatId}/pin).
+
+        :param chat_id: Идентификатор чата
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Json ({"success": bool, "message": str})
+        :rtype: Dict[str: Any]
+        """
+        return self.client.request(
+            "DELETE", f"/chats/{chat_id}/pin", timeout=timeout
+        )
+
     def send_action(self, chat_id, action: str, timeout=None):
         """
         Апи метод отправки действия бота в чат (POST /chats/{chatId}/actions):

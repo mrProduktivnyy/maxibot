@@ -3738,6 +3738,138 @@ class MaxiBot:
             )
         return bool(response.get("success", False)) and not failed
 
+    def pin_chat_message(
+        self,
+        chat_id: Union[int, str],
+        message_id: Union[int, str],
+        disable_notification: Optional[bool] = False,
+    ) -> bool:
+        """
+        Закрепляет сообщение в чате (PUT /chats/{chatId}/pin).
+        Сигнатура один в один с telebot.pin_chat_message. Боту нужно
+        право pin_message.
+
+        Отличие от Telegram: закреп в MAX один на чат — новый
+        вытесняет старый (в Telegram закрепов много).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param message_id: Идентификатор (mid) закрепляемого сообщения —
+            в MAX это строка (message.message_id)
+        :type message_id: Union[int, str]
+
+        :param disable_notification: True — не уведомлять участников
+            (по умолчанию, как в Telegram, уведомление уходит)
+        :type disable_notification: Optional[bool]
+
+        :return: True при успехе; False, если MAX ответил
+            success: false — telebot в такой ситуации бросает
+            ApiTelegramException, поэтому при переносе проверяйте
+            возврат. HTTP-ошибки, как и в telebot, бросают исключение
+        :rtype: bool
+        """
+        # notify шлём только при отключении: пропуск поля = серверный
+        # default true, что и означает disable_notification=False/None
+        notify = False if disable_notification else None
+        response = self.api.pin_message(chat_id, message_id, notify=notify)
+        return bool(isinstance(response, dict) and response.get("success", False))
+
+    def unpin_chat_message(
+        self,
+        chat_id: Union[int, str],
+        message_id: Optional[Union[int, str]] = None,
+    ) -> bool:
+        """
+        Снимает закреп в чате (DELETE /chats/{chatId}/pin). Сигнатура
+        один в один с telebot.unpin_chat_message.
+
+        Закреп в MAX один на чат, поэтому message_id не нужен серверу;
+        если он передан, метод сверяет его с текущим закрепом
+        (GET /chats/{chatId}/pin) и, когда закреплено ДРУГОЕ сообщение
+        или закрепа нет вовсе, ничего не снимает — предупреждение
+        и False (в Telegram снялся бы именно указанный закреп из
+        многих).
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param message_id: Идентификатор (mid) сообщения, чей закреп
+            снять — в MAX это строка; None — снять текущий закреп
+        :type message_id: Optional[Union[int, str]]
+
+        :return: True при успехе; False, если закреплено другое
+            сообщение или MAX ответил success: false — при переносе
+            проверяйте возврат (telebot бросил бы исключение)
+        :rtype: bool
+        """
+        if message_id is not None:
+            info = self.api.get_pinned_message(chat_id)
+            pinned = info.get("message") if isinstance(info, dict) else None
+            # message в 200-ответе бывает и СТРОКОЙ — текстом ошибки
+            # (формы {"success": false, "message": ...} и {code, message}
+            # проходят мимо guard'а клиента), поэтому isinstance
+            pinned_mid = (
+                (pinned.get("body") or {}).get("mid")
+                if isinstance(pinned, dict) else None
+            )
+            if pinned_mid != message_id:
+                logger.warning(
+                    "unpin_chat_message: закреплено сообщение %s, а не %s — "
+                    "закреп не снят (в MAX закреп один на чат)",
+                    pinned_mid, message_id,
+                )
+                return False
+        response = self.api.unpin_message(chat_id)
+        return bool(isinstance(response, dict) and response.get("success", False))
+
+    def unpin_all_chat_messages(self, chat_id: Union[int, str]) -> bool:
+        """
+        Снимает все закрепы чата (DELETE /chats/{chatId}/pin).
+        Сигнатура один в один с telebot.unpin_all_chat_messages.
+        Закреп в MAX один на чат, поэтому метод эквивалентен
+        unpin_chat_message без message_id.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :return: True при успехе; False при success: false — при
+            переносе проверяйте возврат (telebot бросил бы исключение)
+        :rtype: bool
+        """
+        response = self.api.unpin_message(chat_id)
+        return bool(isinstance(response, dict) and response.get("success", False))
+
+    def get_pinned_message(self, chat_id: Union[int, str]) -> Optional[Message]:
+        """
+        Возвращает закреплённое сообщение чата
+        (GET /chats/{chatId}/pin) — расширение MAX: в telebot закреп
+        достаётся только через get_chat(chat_id).pinned_message.
+        None — если закрепа нет.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :return: Закреплённое сообщение или None
+        :rtype: Optional[Message]
+        """
+        info = self.api.get_pinned_message(chat_id)
+        pinned = info.get("message") if isinstance(info, dict) else None
+        # message бывает и строкой — текстом ошибки в формах
+        # {"success": false, "message": ...} / {code, message}, которые
+        # проходят мимо guard'а клиента
+        if not isinstance(pinned, dict):
+            return None
+        # как в Chat.from_chat_info: sender по спеке может быть null
+        # (пост от имени канала), timestamp нужен наверху для date
+        return Message(
+            update={
+                "message": {**pinned, "sender": pinned.get("sender") or {}},
+                "timestamp": pinned.get("timestamp"),
+            },
+            api=self.api,
+        )
+
     def callback_query_handler(self, data=None, **kwargs):
         """
         Декоратор для регистрации обработчиков callback-запросов от inline-кнопок
