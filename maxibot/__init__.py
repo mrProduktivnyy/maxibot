@@ -73,6 +73,13 @@ _CHAT_ACTIONS = {
     "find_location": "typing_on",
 }
 
+# телеботовские content_types, которых MAX не порождает: такие сообщения
+# приходят под другим типом, и хендлер с этим content_type не сработал бы
+# никогда — message_handler предупреждает и подсказывает реальный тип
+_CONTENT_TYPE_HINTS = {
+    "voice": "audio",  # голосовые в MAX — обычное аудио (см. send_voice)
+}
+
 logger = logging.getLogger("maxibot")
 # как в telebot: у логгера из коробки свой stderr-хендлер — не перехваченные
 # ошибки видны без настройки logging, а maxibot.logger.setLevel(logging.DEBUG)
@@ -433,6 +440,16 @@ class MaxiBot:
             # сырые имена вложений MAX из старых ботов ('file', 'image')
             logger.warning("content_types: используйте имена telebot: %s", renamed)
             content_types = [Message._CONTENT_TYPE_MAP.get(name, name) for name in content_types]
+        hinted = {name: real for name, real in _CONTENT_TYPE_HINTS.items()
+                  if name in content_types}
+        if hinted:
+            # тип не переименовывается: 'voice' ловил бы ВСЕ аудио — пусть
+            # автор бота осознанно подпишется на реальный тип сам
+            logger.warning(
+                "content_types: MAX не порождает %s — такие сообщения приходят "
+                "как %s, хендлер с этим content_type не сработает",
+                sorted(hinted), sorted(set(hinted.values())),
+            )
         if isinstance(commands, str):
             logger.warning("commands должен быть списком, обернул строку")
             commands = [commands]
@@ -991,7 +1008,9 @@ class MaxiBot:
         except KeyboardInterrupt:
             self.stop()
 
-    def _send_attachments(self, chat_id, text, attachments, parse_mode, disable_link_preview=None):
+    def _send_attachments(self, chat_id, text, attachments, parse_mode,
+                          disable_link_preview=None, notify=True, link=None,
+                          timeout=None):
         """
         Отправляет сообщение с вложениями, повторяя отправку, пока MAX
         обрабатывает загруженный файл (ошибка ``attachment.not.ready``).
@@ -1010,7 +1029,10 @@ class MaxiBot:
                     text=text,
                     attachments=attachments,
                     parse_mode=parse_mode,
-                    disable_link_preview=disable_link_preview
+                    disable_link_preview=disable_link_preview,
+                    notify=notify,
+                    link=link,
+                    timeout=timeout
                 )
                 break
             except MaxApiException as exc:
@@ -1342,6 +1364,188 @@ class MaxiBot:
             chat_id, caption, final_attachments,
             self._resolve_parse_mode(parse_mode),
             disable_link_preview=disable_web_page_preview
+        )
+
+    def send_audio(
+        self,
+        chat_id: Union[int, str],
+        audio: Union[Any, str],
+        caption: Optional[str] = None,
+        duration: Optional[int] = None,
+        performer: Optional[str] = None,
+        title: Optional[str] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        parse_mode: Optional[str] = None,
+        disable_notification: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        thumbnail: Optional[Any] = None,
+        caption_entities: Optional[Any] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        thumb: Optional[Any] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет аудио. Сигнатура один в один с telebot.send_audio.
+        У MAX родной тип загрузки: POST /uploads?type=audio (токен
+        приходит сразу в ответе, как у видео), затем POST /messages
+        с вложением {"type": "audio", "payload": {"token": ...}};
+        ретраи attachment.not.ready — те же, что у видео и файлов.
+
+        По документации MAX аудио обязано быть ЕДИНСТВЕННЫМ вложением
+        сообщения, поэтому переданный reply_markup игнорируется
+        с предупреждением в логгере (в telebot клавиатуру к аудио
+        приложить можно) — отправьте её отдельным сообщением.
+
+        duration/performer/title принимаются для совместимости и
+        игнорируются — MAX берёт метаданные из самого файла;
+        thumbnail/thumb (обложка), caption_entities,
+        allow_sending_without_reply, protect_content и
+        message_thread_id — тоже. У возвращаемого Message заполняются
+        базовые поля (message_id, chat, content_type "audio"), атрибут
+        audio остаётся None.
+
+        :param chat_id: Чат, куда надо отправить аудио
+        :type chat_id: Union[int, str]
+
+        :param audio: Аудио — байты, file-like объект, InputMedia или,
+            как file_id в telebot, строка-токен ранее загруженного аудио
+            (лежит во входящем вложении payload.token) — уходит без
+            повторной загрузки. URL-строка не поддерживается
+            (ValueError): MAX принимает URL только для изображений
+        :type audio: Union[Any, str]
+
+        :param caption: Текст сообщения при аудио
+        :type caption: Optional[str]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Игнорируется — аудио в MAX обязано быть
+            единственным вложением
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param parse_mode: Разметка подписи (markdown/html). Если не
+            задана, берётся общая разметка бота
+        :type parse_mode: Optional[str]
+
+        :param disable_notification: True — отправить без звука
+        :type disable_notification: Optional[bool]
+
+        :param timeout: Таймаут запроса POST /messages в секундах, как в
+            telebot. Отличие: в telebot аудио уходит одним запросом и
+            timeout покрывает загрузку файла; в MAX файл загружается
+            отдельными запросами со своими таймаутами (60 с на
+            сокет-операцию загрузки), timeout на них не влияет
+        :type timeout: Optional[int]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id
+        :type reply_parameters: Optional[Any]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        if self._check_text_length(text=caption):
+            raise ValueError(f'caption должен быть меньше 4000 символов.\nСейчас их {len(caption)}')
+        if isinstance(audio, str) and audio.startswith(("http://", "https://")):
+            raise ValueError(
+                "MAX принимает URL только для изображений (send_photo). "
+                "Аудио можно отправить только байтами или file-like объектом"
+            )
+        if reply_markup is not None:
+            logger.warning(
+                "send_audio: по документации MAX аудио обязано быть "
+                "единственным вложением сообщения — reply_markup "
+                "игнорируется, отправьте клавиатуру отдельным сообщением"
+            )
+        reply_to_message_id = self._resolve_reply_target(
+            reply_to_message_id, reply_parameters, "send_audio"
+        )
+        link = None
+        if reply_to_message_id:
+            link = {"type": "reply", "mid": reply_to_message_id}
+        final_attachments = []
+        if isinstance(audio, InputMedia) and audio.type == "audio":
+            final_attachments.append(audio.to_dict(api=self.api))
+        else:
+            final_attachments.append(InputMedia(type="audio", media=audio).to_dict(api=self.api))
+        return self._send_attachments(
+            chat_id, caption, final_attachments,
+            self._resolve_parse_mode(parse_mode),
+            notify=not disable_notification,
+            link=link,
+            # как в telebot: timeout=0 означает «без своего таймаута»
+            timeout=timeout or None
+        )
+
+    def send_voice(
+        self,
+        chat_id: Union[int, str],
+        voice: Union[Any, str],
+        caption: Optional[str] = None,
+        duration: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        parse_mode: Optional[str] = None,
+        disable_notification: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        caption_entities: Optional[Any] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет голосовое сообщение. Сигнатура один в один с
+        telebot.send_voice, но отдельного типа голосовых в MAX нет —
+        файл уходит обычным аудио (тонкая обёртка над send_audio,
+        предупреждения в логгере будут от имени send_audio): без
+        «кружка»-плеера голосового, формат должен быть звуковым,
+        который принимает MAX (MP3, WAV, M4A и другие).
+
+        Следствие: и у отправленного, и у входящего сообщения
+        content_type — "audio", а не "voice", поэтому телеботовский
+        обработчик content_types=['voice'] не сработает никогда —
+        подписывайтесь на content_types=['audio'] (message_handler
+        предупредит об этом в логгере); атрибут voice у Message
+        остаётся None.
+
+        duration, caption_entities, allow_sending_without_reply,
+        protect_content и message_thread_id принимаются для
+        совместимости и игнорируются; reply_markup игнорируется
+        с предупреждением — аудио в MAX обязано быть единственным
+        вложением сообщения.
+
+        :param chat_id: Чат, куда надо отправить голосовое
+        :type chat_id: Union[int, str]
+
+        :param voice: Аудио — байты, file-like объект или InputMedia.
+            URL-строка не поддерживается (ValueError)
+        :type voice: Union[Any, str]
+
+        :param caption: Текст сообщения при аудио
+        :type caption: Optional[str]
+
+        :param timeout: Таймаут HTTP-запроса в секундах, как в telebot
+        :type timeout: Optional[int]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        return self.send_audio(
+            chat_id,
+            voice,
+            caption=caption,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            disable_notification=disable_notification,
+            timeout=timeout,
+            reply_parameters=reply_parameters,
         )
 
     def delete_message(

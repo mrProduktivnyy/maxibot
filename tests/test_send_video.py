@@ -152,7 +152,9 @@ print('7 ok: ретраи без повторной загрузки')
 # 8. Регресс compare_types: у InputMedia(type="video") маппинг больше не None
 media = InputMedia(type="video")
 assert media.compare_types.get(media.type) == "video"
-assert InputMedia.compare_types == {"photo": "image", "file": "file", "video": "video"}
-print('8 ok: compare_types содержит video')
+assert InputMedia.compare_types == {
+    "photo": "image", "file": "file", "video": "video", "audio": "audio"
+}
+print('8 ok: compare_types содержит video и audio')
 
 print('ALL OK')

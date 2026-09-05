@@ -30,10 +30,12 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 ## class maxibot.types.InputMedia(type, media, caption, parse_mode)
 Этот объект представляет собой содержимое медиасообщения, которое необходимо отправить  
 **Параметры:**
-* **type** (`str`) - Тип медиавложения  
+* **type** (`str`) - Тип медиавложения (`photo`/`file`/`video`/`audio`)  
 * **media** (`bytes`) - Медиавложение  
 * **caption** (`str`) - Описание отправляемого медиавложению  
 * **parse_mode** (`str`) - Тип форматирования описания отправляемого медиавложения  
+
+Подклассы с зафиксированным типом, как в telebot: `InputMediaPhoto(media, caption, parse_mode)`, `InputMediaVideo(...)`, `InputMediaAudio(...)` (у видео и аудио токен приходит сразу в ответе POST /uploads)  
 ## class maxibot.types.Photo(update: Dict[str, Any])
 Класс сериализации и работы с фотографиями во вложениях  
 **Параметры:**

@@ -781,12 +781,13 @@ class InputMedia(JsonDeserializable):
     """
     Класс формирования объекта attachments для отправки медиа
 
-    :param type: Тип медиа (photo/file/video)
+    :param type: Тип медиа (photo/file/video/audio)
     :type type: str
 
     :param media: Байты медиа; для фото — также строка: прямая
         http(s)-ссылка на изображение (MAX скачает его сам) или токен
-        ранее загруженного изображения (аналог file_id)
+        ранее загруженного изображения (аналог file_id); для аудио —
+        строка-токен ранее загруженного аудио
     :type media: Union[bytes, str]
 
     :param caption: Подпись к медиа
@@ -798,7 +799,8 @@ class InputMedia(JsonDeserializable):
     compare_types = {
         "photo": "image",
         "file": "file",
-        "video": "video"
+        "video": "video",
+        "audio": "audio"
     }
 
     def __init__(self, type: str = None, media: bytes = None, caption: str = None, parse_mode: str = None):
@@ -863,6 +865,11 @@ class InputMedia(JsonDeserializable):
             if self.media.startswith(("http://", "https://")):
                 return {"type": "image", "payload": {"url": self.media}}
             return {"type": "image", "payload": {"token": self.media}}
+        if self.type == "audio" and isinstance(self.media, str):
+            # строка — токен ранее загруженного аудио (аналог file_id, лежит
+            # во входящем вложении payload.token); URL для аудио MAX не
+            # принимает — send_audio отрезает его раньше с ValueError
+            return {"type": "audio", "payload": {"token": self.media}}
         upload = self._get_upload_url(type_attach=self.type)
         upload_url = upload.get("url")
         if not upload_url:
@@ -870,8 +877,8 @@ class InputMedia(JsonDeserializable):
         if is_pil_image(self.media):
             self.media = pil_image_to_bytes(self.media)
         load_file_result = self._load_file_to_max(url=upload_url, file_name=file_name)
-        if self.type == "video":
-            # у видео (и аудио) MAX отдаёт token сразу в ответе POST /uploads,
+        if self.type in ("video", "audio"):
+            # у видео и аудио MAX отдаёт token сразу в ответе POST /uploads,
             # ответ самой загрузки файла токена не содержит
             token_dict = {"token": upload.get("token")}
         elif file_name:
@@ -918,6 +925,24 @@ class InputMediaVideo(InputMedia, JsonDeserializable):
 
     def __init__(self, media=None, caption=None, parse_mode=None):
         super().__init__(type="video", media=media, caption=caption, parse_mode=parse_mode)
+
+
+class InputMediaAudio(InputMedia, JsonDeserializable):
+    """
+    Класс для отправки аудио
+
+    :param media: Байты аудио или file-like объект
+    :type media: bytes
+
+    :param caption: Подпись к аудио
+    :type caption: Optional[str]
+
+    :param parse_mode: Режим парсинга текста
+    :type parse_mode: Optional[str]
+    """
+
+    def __init__(self, media=None, caption=None, parse_mode=None):
+        super().__init__(type="audio", media=media, caption=caption, parse_mode=parse_mode)
 
 
 class Message(JsonDeserializable):

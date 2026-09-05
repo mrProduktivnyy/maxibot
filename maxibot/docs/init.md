@@ -63,6 +63,13 @@
     * **reply_markup** - Объект клавиатуры  
     * **visible_file_name** - Имя файла, которое увидит пользователь  
     * **disable_web_page_preview** - Отключить предпросмотр ссылок  
+* **send_audio** (`chat_id`, `audio`, `caption`, `duration`, `performer`, `title`, `reply_to_message_id`, `reply_markup`, `parse_mode`, `disable_notification`, `timeout`, …) - Отправляет аудио через родной тип загрузки MAX: POST /uploads?type=audio (токен сразу в ответе, как у видео) → вложение `{"type": "audio", "payload": {"token"}}`. Сигнатура как в telebot. У возвращаемого Message content_type — "audio", атрибут audio остаётся None  
+    * **audio** - Байты, file-like объект, InputMedia или, как file_id в telebot, строка-токен ранее загруженного аудио (из входящего вложения payload.token) — уходит без повторной загрузки; URL — ValueError (MAX принимает URL только для изображений)  
+    * **duration/performer/title, thumbnail/thumb** - Принимаются и игнорируются — MAX берёт метаданные из файла, обложку задать нельзя  
+    * **reply_markup** - Игнорируется с предупреждением: по документации MAX аудио обязано быть единственным вложением сообщения (отличие от telebot)  
+    * **disable_notification/reply_to_message_id/reply_parameters** - Работают как в telebot  
+    * **timeout** - Таймаут запроса POST /messages; в отличие от telebot НЕ покрывает загрузку файла — она идёт отдельными запросами со своими таймаутами  
+* **send_voice** (`chat_id`, `voice`, `caption`, `duration`, …) - Отправляет голосовое. Отдельного типа голосовых в MAX нет — тонкая обёртка над send_audio: уходит обычным аудио, без «кружка»-плеера; формат должен быть звуковым, который принимает MAX (MP3, WAV, M4A и другие). Следствие: content_type отправленного и входящего — "audio", не "voice", обработчик content_types=['voice'] не сработает никогда (message_handler предупредит) — подписывайтесь на ['audio']; Message.voice остаётся None  
 * **delete_message** (`chat_id`, `message_id`) - Удаляет сообщение `message_id` в чате `chat_id`  
     * **chat_id** - Чат, где надо удалить сообщение  
     * **message_id** - Уникальный идентификатор сообщения  
