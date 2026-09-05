@@ -2371,6 +2371,128 @@ class MaxiBot:
 
         return {}
 
+    def edit_message_caption(
+        self,
+        caption: str,
+        chat_id: Optional[Union[int, str]] = None,
+        message_id: Optional[str] = None,
+        inline_message_id: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        caption_entities: Optional[Any] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+    ):
+        """
+        Меняет подпись сообщения с вложениями. Сигнатура один в один
+        с telebot.edit_message_caption (caption — первым параметром).
+
+        Своего editMessageCaption в MAX нет, а PUT /messages заменяет
+        body целиком, поэтому честная эмуляция: GET /messages/{messageId}
+        → текущие вложения пересобираются в форму отправки (медиа — по
+        token, стикер — по code, локация — по координатам, контакт — по
+        vcf_info/max_info) → PUT /messages с новой подписью и теми же
+        вложениями. Reply/forward-связка исходного сообщения
+        переносится в PUT — правка подписи не снимает ответ (как и в
+        Telegram). Правка приходит без пуша (notify=False).
+
+        Как в telebot: без reply_markup клавиатура исходного сообщения
+        СНИМАЕТСЯ (editMessageCaption в Telegram ведёт себя так же) —
+        чтобы сохранить её, передайте клавиатуру заново. К сообщению
+        с аудио/файлом/стикером/контактом клавиатура не прикладывается
+        (по документации MAX такое вложение обязано быть единственным) —
+        предупреждение в логгере.
+
+        Отличия от telebot: на чисто текстовом сообщении просто заменит
+        текст (в Telegram была бы ошибка «нет подписи»); разметка
+        исходной подписи не переносится — parse_mode действует на новую
+        подпись; caption_entities игнорируется.
+
+        :param caption: Новая подпись
+        :type caption: str
+
+        :param chat_id: Идентификатор чата — принимается для
+            совместимости, mid в MAX глобален
+        :type chat_id: Optional[Union[int, str]]
+
+        :param message_id: Идентификатор сообщения — в MAX обязателен
+            (без него ValueError: инлайн-сообщений в MAX нет)
+        :type message_id: Optional[str]
+
+        :param inline_message_id: Принимается для совместимости и
+            игнорируется — инлайн-режима в MAX нет
+        :type inline_message_id: Optional[str]
+
+        :param parse_mode: Разметка новой подписи (markdown/html). Если
+            не задана, берётся общая разметка бота
+        :type parse_mode: Optional[str]
+
+        :param caption_entities: Принимается для совместимости и
+            игнорируется
+        :type caption_entities: Optional[Any]
+
+        :param reply_markup: Новая клавиатура; None — клавиатура
+            снимается, как в telebot
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :return: Message при успехе, иначе {} (как у соседних
+            edit_message_*)
+        :rtype: Message | {}
+        """
+        if not message_id:
+            raise ValueError(
+                "edit_message_caption: в MAX нужен message_id — "
+                "инлайн-сообщений (inline_message_id) в MAX нет"
+            )
+        info = self.api.get_message(msg_id=message_id)
+        msg = {}
+        if isinstance(info, dict):
+            msg = info.get("message") or info
+        body = msg.get("body") or {}
+        rebuilt = self._rebuild_attachments(body.get("attachments") or [])
+        final_attachments = list(rebuilt)
+        if reply_markup:
+            must_be_alone = {"audio", "file", "contact", "sticker"}
+            alone_type = next((a.get("type") for a in rebuilt
+                               if a.get("type") in must_be_alone), None)
+            if alone_type:
+                logger.warning(
+                    "edit_message_caption: вложение «%s» по документации MAX "
+                    "обязано быть единственным вложением сообщения — "
+                    "reply_markup игнорируется, отправьте клавиатуру "
+                    "отдельным сообщением",
+                    alone_type,
+                )
+            elif hasattr(reply_markup, 'to_attachment'):
+                final_attachments.append(reply_markup.to_attachment())
+            else:
+                final_attachments.append(reply_markup)
+
+        # PUT заменяет body целиком — reply/forward-связку исходного
+        # сообщения переносим, чтобы правка подписи не снимала ответ
+        # (editMessageCaption в Telegram связку не трогает)
+        link_info = msg.get("link") or {}
+        link_mid = (link_info.get("message") or {}).get("mid")
+        put_link = None
+        if link_info.get("type") and link_mid:
+            put_link = {"type": link_info["type"], "mid": link_mid}
+
+        response = self.api.send_message(
+            msg_id=message_id,
+            text=caption,
+            method="PUT",
+            attachments=final_attachments,
+            parse_mode=self._resolve_parse_mode(parse_mode),
+            # правка не должна пушить «Сообщение было изменено»
+            notify=False,
+            link=put_link,
+        )
+
+        if isinstance(response, dict) and response.get("success"):
+            timestamp = int(time.time() * 1000)
+            message_data = get_edit_message_data(caption, chat_id, message_id, final_attachments, timestamp)
+            return Message(update=message_data, api=self.api)
+
+        return {}
+
     def edit_message_reply_markup(
         self,
         chat_id: Union[str, int],

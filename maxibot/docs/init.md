@@ -93,6 +93,7 @@
     * **message_id** - Идентификатор сообщения, которое надо поменять  
     * **reply_markup** - Объект клавиатуры  
     * **parse_mode** - Формат сообщения  
+* **edit_message_caption** (`caption`, `chat_id`, `message_id`, `inline_message_id`, `parse_mode`, `caption_entities`, `reply_markup`) - Меняет подпись сообщения с вложениями. Сигнатура как в telebot (caption первым). Своего editMessageCaption в MAX нет, а PUT /messages заменяет body целиком — эмуляция: GET /messages/{messageId} → пересборка текущих вложений (медиа по token, стикер по code, локация по координатам, контакт по vcf_info/max_info) → PUT с новой подписью и теми же вложениями, без пуша (notify=False); reply/forward-связка исходного сообщения переносится в PUT — правка подписи не снимает ответ. Как в telebot: без reply_markup клавиатура исходного сообщения снимается; к аудио/файлу/стикеру/контакту клавиатура не прикладывается (warning — MAX требует единственное вложение). Отличия: на чисто текстовом сообщении заменит текст (в Telegram — ошибка); message_id обязателен (без него ValueError — инлайн-сообщений в MAX нет); caption_entities игнорируется. Возвращает Message при успехе, иначе {}  
 * **edit_message_reply_markup** (`chat_id`, `message_id`, `reply_markup`, `parse_mode`) - Редактирует клавиатуру сообщения  
     * **chat_id** - Чат, где надо изменить сообщение  
     * **message_id** - Идентификатор сообщения, которое надо поменять  
