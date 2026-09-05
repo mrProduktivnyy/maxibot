@@ -12,8 +12,9 @@ MAX API документация: https://dev.max.ru/docs-api/objects/Message
 * **text** (`str`) - Текст сообщения  
 * **caption** (`str`) - Подпись медиа-сообщения (у медиа text тоже заполнен — отличие от telebot)  
 * **json** (`dict`) - Сырой dict сообщения из обновления MAX  
-* **photo** (`ImageAttachment`) - Опционально. Содержит вложения фото.  
+* **photo** (`ImageAttachment`) - Опционально. Содержит вложения фото. Поддерживает телеботовский паттерн списка: `message.photo[-1].file_id` (размер в MAX один)  
 * **photo_reply** (`Photo`) - Опциолнально. Вложения фото из сообщения, на которое ответили  
+* **video** (`Video`) / **audio** (`Audio`) / **document** (`Document`) - Опционально. Первое вложение соответствующего типа с телеботовскими атрибутами (file_id — токен, file_path — прямая ссылка; у видео file_path None — ссылки через bot.get_file/get_video). Голосовые в MAX не отличаются от аудио: voice всегда None, голосовое приходит в audio  
 * **update_type** (`str`) - Тип события, произошедшего в чате  
 * **html_text / html_caption** (`str`) - Как в telebot; entities в MAX нет — просто текст/подпись  
 
@@ -71,6 +72,18 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **description** (`str`) - Описание команды  
 ## class maxibot.types.BotName(name: str) / BotDescription(description: str) / BotShortDescription(short_description: str)
 Результаты get_my_name / get_my_description / get_my_short_description — как одноимённые типы telebot. Отдельного короткого описания в MAX нет: BotShortDescription заполняется из единственного description  
+## class maxibot.types.File(file_id, file_path, file_size)
+Файл, готовый к скачиванию (результат bot.get_file) — как telebot.types.File, но file_path — ПОЛНЫЙ URL (в Telegram — относительный путь), роль file_id играет токен вложения либо сама ссылка  
+**Параметры:**
+* **file_id / file_unique_id** (`str`) - То, что передали в get_file (ссылка или токен)  
+* **file_path** (`str`) - Полный URL для download_file (None, если видео недоступно)  
+* **file_size** (`int`) - Всегда None: MAX не сообщает размер (кроме document.file_size из вложения)  
+## class maxibot.types.Video(attach: Dict[str, Any])
+Видео-вложение — атрибуты telebot.types.Video: file_id/file_unique_id (токен), width, height, duration, thumbnail (ImagePayload с телеботовскими полями PhotoSize) и устаревший алиас thumb, file_name/mime_type/file_size (None). MAX-поля: token, url (НЕ прямая ссылка!), urls (`VideoUrls` из get_video: mp4_1080…mp4_144, hls, .best — лучший mp4), file_path (лучшая прямая ссылка; у вложения из сообщения None — скачиваемые ссылки отдаёт только GET /videos/{videoToken})  
+## class maxibot.types.Audio(attach: Dict[str, Any])
+Аудио-вложение — атрибуты telebot.types.Audio: file_id (токен); duration/performer/title/file_name/mime_type/file_size/thumbnail (и алиас thumb) — None (MAX их не сообщает). MAX-поля: token, url, file_path (прямая ссылка), transcription (расшифровка речи)  
+## class maxibot.types.Document(attach: Dict[str, Any])
+Файл-вложение — атрибуты telebot.types.Document: file_id (токен), file_name, file_size; mime_type/thumbnail (и алиас thumb) — None. MAX-поля: token, url, file_path (прямая ссылка)  
 ## class maxibot.types.ChatLink(update: Dict[str, Any])
 Класс сериализации и работы с объектом чата в пересланном сообщении  
 **Параметры:**
@@ -101,16 +114,22 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **text** (`boolean`) - Новый текст сообщения  
 * **attachments** (`str`) - Вложения сообщения. Могут быть одним из типов Attachment.  
 ## class maxibot.types.ImageAttachment(attach: Dict[str, Any])
-Класс для работы с вложениями типа "image"  
+Класс для работы с вложениями типа "image". Ведёт себя и как телеботовский список PhotoSize: `photo[-1]`/`photo[0]`, len, итерация (размер в MAX один — возвращается само вложение)  
 **Параметры:**
 * **payload** (`ImagePayload`) - Параметры вложения  
 * **type** (`str`) - Тип вложения  
+* **file_id / file_unique_id** (`str`) - Токен вложения (телеботовские имена)  
+* **file_path** (`str`) - Прямая ссылка (payload.url) для download_file  
+* **width / height / file_size** - Всегда None: MAX размеров изображения не сообщает  
 ## class maxibot.types.ImagePayload(payload: Dict[str, Any])
-Класс для хранения данных изображения  
+Класс для хранения данных изображения. Живёт и как message.video.thumbnail, поэтому несёт телеботовские поля PhotoSize  
 **Параметры:**
 * **photo_id** (`ImagePayload`) - Уникальный ID этого изображения  
 * **token** (`str`) - Токен изображения  
 * **url** (`str`) - URL изображения  
+* **file_id / file_unique_id** (`str`) - Токен (телеботовские имена)  
+* **file_path** (`str`) - Прямая ссылка (url) для download_file  
+* **width / height / file_size** - Всегда None  
 ## class maxibot.types.InlineKeyboardMarkup(keyboard, row_width)
 Класс для создания inline-клавиатур в сообщениях. Сигнатура как у telebot: keyboard — готовый список рядов кнопок, row_width по умолчанию 3  
 **Параметры:**

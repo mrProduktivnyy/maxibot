@@ -220,6 +220,56 @@ class Client:
 
         return result
 
+    def download(
+        self,
+        url: str,
+        timeout: Optional[Union[float, Tuple[float, float]]] = None
+    ) -> bytes:
+        """
+        Скачивает файл по прямой ссылке и возвращает байты.
+
+        Заголовок Authorization не отправляется: ссылки на содержимое
+        ведут на CDN MAX, а не на API, — светить токен бота стороннему
+        хосту незачем. Прокси, TLS-настройки, таймауты и ретраи — общие
+        с request() (модульные переменные maxibot.apihelper).
+
+        :param url: Полный URL файла (payload.url вложения или
+            get_file(...).file_path)
+        :type url: str
+
+        :param timeout: Таймаут только этого запроса: число (секунд)
+            или пара (connect, read)
+        :type timeout: Optional[Union[float, Tuple[float, float]]]
+
+        :return: Содержимое файла
+        :rtype: bytes
+        """
+        from maxibot import apihelper
+
+        connect_timeout = apihelper.CONNECT_TIMEOUT
+        read_timeout = apihelper.READ_TIMEOUT
+        if timeout is not None:
+            if isinstance(timeout, tuple):
+                connect_timeout, read_timeout = timeout
+            else:
+                connect_timeout = read_timeout = timeout
+
+        proxies = apihelper.proxy if apihelper.proxy is not None else self.proxy
+        request_kwargs = dict(
+            method="GET",
+            url=url,
+            proxies=proxies,
+            timeout=(connect_timeout, read_timeout)
+        )
+        function_name = f"GET {url}"
+
+        response = self._send(function_name, request_kwargs)
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            raise MaxApiHTTPException(function_name=function_name, result=response)
+        return response.content
+
     def _send(self, function_name: str, request_kwargs: Dict[str, Any]) -> requests.Response:
         """
         Выполняет HTTP-запрос, при apihelper.RETRY_ON_ERROR повторяя его после

@@ -593,6 +593,15 @@ class ImagePayload(JsonDeserializable):
         self.photo_id = payload.get("photo_id")
         self.token = payload.get("token")
         self.url = payload.get("url")
+        # телеботовские поля PhotoSize — объект живёт и как
+        # message.video.thumbnail, где telebot-код ждёт file_id;
+        # file_path — прямая ссылка для download_file
+        self.file_id = self.token
+        self.file_unique_id = self.token
+        self.file_path = self.url
+        self.file_size = None
+        self.width = None
+        self.height = None
 
 
 class ImageAttachment(JsonDeserializable):
@@ -606,6 +615,26 @@ class ImageAttachment(JsonDeserializable):
     def __init__(self, attach: Dict[str, Any]):
         self.payload = ImagePayload(payload=attach.get("payload"))
         self.type = attach.get("type")
+        # телеботовские поля PhotoSize: file_id — токен вложения (им же
+        # фото переотправляется через send_photo), file_path — прямая
+        # ссылка для download_file; размеров у image-вложения MAX нет
+        self.file_id = self.payload.token
+        self.file_unique_id = self.payload.token
+        self.file_size = None
+        self.width = None
+        self.height = None
+        self.file_path = self.payload.url
+
+    # в telebot message.photo — список PhotoSize; в MAX размер один,
+    # поэтому канонические photo[-1]/photo[0] возвращают само вложение
+    def __getitem__(self, index):
+        return (self,)[index]
+
+    def __len__(self):
+        return 1
+
+    def __iter__(self):
+        return iter((self,))
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -622,6 +651,157 @@ class ImageAttachment(JsonDeserializable):
             },
             "type": self.type
         }
+
+
+class File(JsonDeserializable):
+    """
+    Файл, готовый к скачиванию, — как telebot.types.File, но file_path
+    в MAX — это ПОЛНЫЙ URL (в Telegram — относительный путь на сервере
+    файлов), а роль file_id играет токен вложения либо сама ссылка.
+    Канонический паттерн переносится без правок:
+
+        file_info = bot.get_file(message.document.file_id)
+        data = bot.download_file(file_info.file_path)
+    """
+
+    def __init__(self, file_id: Optional[str] = None,
+                 file_path: Optional[str] = None,
+                 file_size: Optional[int] = None):
+        self.file_id = file_id
+        self.file_unique_id = file_id
+        self.file_size = file_size
+        self.file_path = file_path
+
+
+class VideoUrls(JsonDeserializable):
+    """
+    Ссылки воспроизведения видео из GET /videos/{videoToken}:
+    mp4_1080 … mp4_144 (обычные файлы, любая может быть None)
+    и hls (плейлист трансляции — не скачиваемый файл)
+    """
+
+    _QUALITY_ORDER = ("mp4_1080", "mp4_720", "mp4_480", "mp4_360",
+                      "mp4_240", "mp4_144")
+
+    def __init__(self, urls: Optional[Dict[str, Any]]):
+        for key in self._QUALITY_ORDER + ("hls",):
+            setattr(self, key, (urls or {}).get(key))
+
+    @property
+    def best(self) -> Optional[str]:
+        """Лучший доступный mp4; если mp4 нет вовсе — hls"""
+        for key in self._QUALITY_ORDER:
+            url = getattr(self, key)
+            if url:
+                return url
+        return self.hls
+
+
+class Video(JsonDeserializable):
+    """
+    Видео — атрибуты telebot.types.Video (file_id/width/height/duration…)
+    поверх видео-вложения MAX. file_id — токен вложения; file_path
+    у вложения из сообщения всегда None: payload.url видео — НЕ прямая
+    ссылка, скачиваемые ссылки отдаёт только GET /videos/{videoToken}
+    (bot.get_file(токен) или bot.get_video(токен))
+    """
+
+    def __init__(self, attach: Dict[str, Any]):
+        payload = attach.get("payload") or {}
+        self.token = payload.get("token")
+        self.url = payload.get("url")
+        self.file_id = self.token
+        self.file_unique_id = self.token
+        self.width = attach.get("width")
+        self.height = attach.get("height")
+        self.duration = attach.get("duration")
+        thumbnail = attach.get("thumbnail")
+        self.thumbnail = ImagePayload(payload=thumbnail) if thumbnail else None
+        self.file_name = None
+        self.mime_type = None
+        self.file_size = None
+        self.urls: Optional[VideoUrls] = None
+        self.file_path: Optional[str] = None
+
+    @property
+    def thumb(self):
+        """Устаревший алиас thumbnail — как в telebot"""
+        return self.thumbnail
+
+    @classmethod
+    def from_details(cls, details: Dict[str, Any]) -> "Video":
+        """
+        Видео из ответа GET /videos/{videoToken}
+        (VideoAttachmentDetails): токен, ссылки, размеры, длительность
+        """
+        video = cls({
+            "payload": {"token": details.get("token")},
+            "width": details.get("width"),
+            "height": details.get("height"),
+            "duration": details.get("duration"),
+            "thumbnail": details.get("thumbnail"),
+        })
+        # urls null — видео недоступно, тогда и file_path остаётся None
+        urls = details.get("urls")
+        if urls is not None:
+            video.urls = VideoUrls(urls)
+            video.file_path = video.urls.best
+        return video
+
+
+class Audio(JsonDeserializable):
+    """
+    Аудио — атрибуты telebot.types.Audio поверх аудио-вложения MAX.
+    file_id — токен вложения, file_path — прямая ссылка для
+    download_file; длительности/исполнителя/названия у аудио-вложения
+    MAX нет. transcription — расшифровка речи (расширение MAX)
+    """
+
+    def __init__(self, attach: Dict[str, Any]):
+        payload = attach.get("payload") or {}
+        self.token = payload.get("token")
+        self.url = payload.get("url")
+        self.file_id = self.token
+        self.file_unique_id = self.token
+        self.duration = None
+        self.performer = None
+        self.title = None
+        self.file_name = None
+        self.mime_type = None
+        self.file_size = None
+        self.thumbnail = None
+        self.transcription = attach.get("transcription")
+        self.file_path = self.url
+
+    @property
+    def thumb(self):
+        """Устаревший алиас thumbnail — как в telebot"""
+        return self.thumbnail
+
+
+class Document(JsonDeserializable):
+    """
+    Документ — атрибуты telebot.types.Document поверх file-вложения
+    MAX. file_id — токен вложения, file_path — прямая ссылка для
+    download_file, file_name/file_size — из вложения
+    """
+
+    def __init__(self, attach: Dict[str, Any]):
+        payload = attach.get("payload") or {}
+        self.token = payload.get("token")
+        self.url = payload.get("url")
+        self.file_id = self.token
+        self.file_unique_id = self.token
+        self.file_name = attach.get("filename")
+        self.file_size = attach.get("size")
+        self.mime_type = None
+        self.thumbnail = None
+        self.file_path = self.url
+
+    @property
+    def thumb(self):
+        """Устаревший алиас thumbnail — как в telebot"""
+        return self.thumbnail
 
 
 class Recipient(JsonDeserializable):
@@ -1337,6 +1517,29 @@ class Message(JsonDeserializable):
                             return ImageAttachment(attach=attach)
         return None
 
+    def _fill_media_attachments(self, update: Dict[str, Any]) -> None:
+        """
+        Заполняет message.video / message.audio / message.document
+        объектами вложений (Video/Audio/Document) — чтобы работал
+        канонический телеботовский паттерн
+        bot.get_file(message.document.file_id). Берётся первое вложение
+        каждого типа; в MAX голосовые не отличаются от аудио, поэтому
+        voice всегда None, а голосовое приходит в audio (как в №2:
+        voice -> audio)
+        """
+        attachments = ((update.get("message") or {}).get("body")
+                       or {}).get("attachments") or ()
+        for attach in attachments:
+            if not isinstance(attach, dict):
+                continue
+            a_type = attach.get("type")
+            if a_type == "video" and self.video is None:
+                self.video = Video(attach)
+            elif a_type == "audio" and self.audio is None:
+                self.audio = Audio(attach)
+            elif a_type == "file" and self.document is None:
+                self.document = Document(attach)
+
     @staticmethod
     def _get_content_type(update: Dict[str, Any]) -> str:
         """
@@ -1450,6 +1653,7 @@ class Message(JsonDeserializable):
             self.text: Optional[str] = self._get_msg_text(update=update)
             self.photo: Optional[ImageAttachment] = self._get_photo_from_attachments(update=update)
             self.photo_reply: Photo = Photo(update=update)
+            self._fill_media_attachments(update=update)
             self.update_type = update.get('update_type')
             if self.content_type != "text" and self.text:
                 # у медиа-сообщений подпись доступна и как caption;

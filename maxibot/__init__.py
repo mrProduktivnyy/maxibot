@@ -15,6 +15,7 @@ from maxibot import apihelper, util
 from maxibot.apihelper import Api
 from maxibot.types import Chat, ChatMember, Message, CallbackQuery, InputMedia, MessageID, Update
 from maxibot.types import BotCommand, BotName, BotDescription, BotShortDescription
+from maxibot.types import File, Video
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.exceptions import (
@@ -4177,6 +4178,139 @@ class MaxiBot:
             )
         response = self.api.edit_bot_info({"photo": payload})
         return isinstance(response, dict)
+
+    @staticmethod
+    def _is_http_url(value: Any) -> bool:
+        """Строка выглядит прямой http(s)-ссылкой"""
+        return (isinstance(value, str)
+                and value.lower().startswith(("http://", "https://")))
+
+    def get_file(self, file_id: Optional[str]) -> File:
+        """
+        Готовит файл к скачиванию — как telebot.get_file, но в MAX нет
+        file_id, поэтому метод принимает то, что лежит во вложениях:
+
+        - прямую ссылку (message.document.file_path,
+          message.photo[-1].file_path, message.audio.file_path) —
+          возвращается сразу, без запроса к API;
+        - токен видео (message.video.file_id) — ссылка берётся из
+          GET /videos/{videoToken}: file_path = лучший доступный mp4
+          (1080 -> … -> 144, если mp4 нет — hls); None, если видео
+          недоступно.
+
+        Токены остальных вложений (документов, аудио, фото) в MAX
+        разрешить в ссылку нельзя — такого эндпоинта нет, GET /videos
+        ответит 404 (MaxApiHTTPException). Поэтому канонический
+        телеботовский паттерн для видео работает без правок:
+
+            file_info = bot.get_file(message.video.file_id)
+            data = bot.download_file(file_info.file_path)
+
+        а для остальных вложений замените .file_id на .file_path —
+        прямая ссылка уже лежит в самом вложении:
+
+            file_info = bot.get_file(message.document.file_path)
+
+        (или сразу bot.download_file(message.document.file_path)).
+
+        :param file_id: Прямая ссылка или токен видео-вложения
+        :type file_id: Optional[str]
+
+        :return: File с file_path — полным URL для download_file
+        :rtype: File
+        """
+        if not file_id:
+            raise ValueError(
+                "get_file: передайте прямую ссылку вложения "
+                "(message.document.file_path) или токен видео "
+                "(message.video.file_id)"
+            )
+        if self._is_http_url(file_id):
+            return File(file_id=file_id, file_path=file_id)
+        try:
+            video = self.get_video(file_id)
+        except MaxApiHTTPException as error:
+            if error.status_code == 404:
+                # частый случай миграции: в get_file попал токен
+                # документа/аудио/фото, который в ссылку не разрешить
+                logger.warning(
+                    "get_file: токен не найден среди видео. В MAX "
+                    "в ссылку разрешаются только токены видео; у "
+                    "остальных вложений передавайте прямую ссылку — "
+                    "message.document.file_path и т.п."
+                )
+            raise
+        file_path = video.file_path if video else None
+        return File(file_id=file_id, file_path=file_path)
+
+    def get_file_url(self, file_id: Optional[str]) -> Optional[str]:
+        """
+        Прямая ссылка для скачивания файла — как telebot.get_file_url.
+        Принимает то же, что get_file (ссылку или токен видео);
+        в отличие от Telegram ссылка не собирается из токена бота —
+        это готовый URL MAX. None — если видео недоступно
+        (urls: null в GET /videos).
+
+        :param file_id: Прямая ссылка или токен видео-вложения
+        :type file_id: Optional[str]
+
+        :return: Полный URL файла; None — видео недоступно
+        :rtype: Optional[str]
+        """
+        return self.get_file(file_id).file_path
+
+    def download_file(self, file_path: str) -> bytes:
+        """
+        Скачивает файл и возвращает байты — как telebot.download_file.
+        file_path в MAX — это ПОЛНЫЙ URL (get_file(...).file_path или
+        payload.url вложения: message.document.file_path и т.п.);
+        относительных путей, как в Telegram, здесь нет. Запрос идёт
+        с настройками сети maxibot.apihelper (прокси, таймауты,
+        ретраи), но без токена бота — ссылки ведут на CDN.
+
+        :param file_path: Полный URL файла
+        :type file_path: str
+
+        :return: Содержимое файла
+        :rtype: bytes
+        """
+        if not file_path:
+            # сюда чаще всего приходит get_file(...).file_path
+            # недоступного видео (urls: null) — не путать с токеном
+            raise ValueError(
+                "download_file: file_path пуст — видео недоступно "
+                "(GET /videos вернул urls: null); проверяйте "
+                "file_info.file_path перед скачиванием"
+            )
+        if not self._is_http_url(file_path):
+            raise ValueError(
+                "download_file: в MAX file_path — это полный URL; "
+                "возьмите его из get_file(...).file_path или прямо из "
+                "вложения (message.document.file_path). Токен сюда "
+                "передавать нельзя — сначала get_file(токен)"
+            )
+        return self.api.download_file(file_path)
+
+    def get_video(self, video_token: str) -> Optional[Video]:
+        """
+        Информация о видео-вложении (GET /videos/{videoToken}) —
+        расширение MAX, в telebot аналога нет: прямые ссылки
+        воспроизведения (video.urls.mp4_1080 … mp4_144, hls,
+        video.file_path — лучшая из них) и метаданные (width, height,
+        duration, thumbnail). urls может быть null — видео недоступно,
+        тогда file_path тоже None.
+
+        :param video_token: Токен видео-вложения
+            (message.video.file_id)
+        :type video_token: str
+
+        :return: Видео с прямыми ссылками или None
+        :rtype: Optional[Video]
+        """
+        details = self.api.get_video(video_token)
+        if not isinstance(details, dict):
+            return None
+        return Video.from_details(details)
 
     def callback_query_handler(self, data=None, **kwargs):
         """

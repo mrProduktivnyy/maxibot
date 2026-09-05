@@ -1,5 +1,6 @@
 import requests
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 
 from maxibot.core.network.client import Client
 
@@ -89,6 +90,46 @@ class Api:
         Получает сообщение по `msg_id`
         """
         return self.client.request("GET", f"/messages/{msg_id}")
+
+    def get_video(self, video_token: str, timeout=None):
+        """
+        Информация о видео-вложении (GET /videos/{videoToken}):
+        прямые ссылки воспроизведения и метаданные.
+
+        :param video_token: Токен видео-вложения
+        :type video_token: str
+
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: VideoAttachmentDetails: token, urls
+            (mp4_1080…mp4_144/hls; null — видео недоступно), thumbnail,
+            width, height, duration
+        :rtype: Dict[str, Any]
+        """
+        # настоящие токены по спеке [\w-]+, но сюда попадают произвольные
+        # строки из get_file — экранируем, чтобы мусор со слэшем/«..»
+        # остался сегментом пути и получил честный 404, а не уехал
+        # на другой эндпоинт
+        return self.client.request(
+            "GET", f"/videos/{quote(str(video_token), safe='')}",
+            timeout=timeout
+        )
+
+    def download_file(self, url: str, timeout=None) -> bytes:
+        """
+        Скачивает файл по прямой ссылке (payload.url вложения) и
+        возвращает байты. Заголовок Authorization не отправляется —
+        ссылки ведут на CDN, токен бота там не нужен.
+
+        :param url: Полный URL файла
+        :type url: str
+
+        :param timeout: Таймаут запроса: секунды или пара (connect, read)
+
+        :return: Содержимое файла
+        :rtype: bytes
+        """
+        return self.client.download(url, timeout=timeout)
 
     def send_message(
         self,

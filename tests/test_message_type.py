@@ -49,7 +49,7 @@ def make_message(**kwargs):
 msg = make_message(text="отчёт", attachments=[{"type": "file", "payload": {"token": "t1"}}])
 assert msg.content_type == "document", msg.content_type
 assert msg.caption == "отчёт" and msg.text == "отчёт"
-assert msg.document is None  # объект появится в issue про файлы
+assert msg.document is not None and msg.document.file_id == "t1"
 print("1 ok: file -> document, caption заполнен")
 
 # 2. Остальные типы вложений отдают имена как в telebot
