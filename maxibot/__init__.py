@@ -78,6 +78,8 @@ _CHAT_ACTIONS = {
 # никогда — message_handler предупреждает и подсказывает реальный тип
 _CONTENT_TYPE_HINTS = {
     "voice": "audio",  # голосовые в MAX — обычное аудио (см. send_voice)
+    "video_note": "video",  # кружки в MAX — обычное видео (см. send_video_note)
+    "animation": "video",  # гифки в MAX — обычное видео или картинка (см. send_animation)
 }
 
 logger = logging.getLogger("maxibot")
@@ -1305,9 +1307,11 @@ class MaxiBot:
         :param chat_id: Чат, куда надо отправить сообщение
         :type chat_id: Union[int, str]
 
-        :param video: Видео — байты или file-like объект. URL-строка не
-            поддерживается (ValueError): MAX принимает URL только для
-            изображений
+        :param video: Видео — байты, file-like объект или, как file_id
+            в telebot, строка-токен ранее загруженного видео (лежит во
+            входящем вложении payload.token) — уходит без повторной
+            загрузки. URL-строка не поддерживается (ValueError):
+            MAX принимает URL только для изображений
         :type video: Union[Any, str]
 
         :param duration: Принимается для совместимости с telebot и
@@ -1348,7 +1352,8 @@ class MaxiBot:
         if isinstance(video, str) and video.startswith(("http://", "https://")):
             raise ValueError(
                 "MAX принимает URL только для изображений (send_photo). "
-                "Видео можно отправить только байтами или file-like объектом"
+                "Видео можно отправить байтами, file-like объектом или "
+                "строкой-токеном ранее загруженного видео"
             )
         final_attachments = []
         if isinstance(video, InputMedia) and video.type == "video":
@@ -1364,6 +1369,247 @@ class MaxiBot:
             chat_id, caption, final_attachments,
             self._resolve_parse_mode(parse_mode),
             disable_link_preview=disable_web_page_preview
+        )
+
+    def send_animation(
+        self,
+        chat_id: Union[int, str],
+        animation: Union[Any, str],
+        duration: Optional[int] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        thumbnail: Optional[Any] = None,
+        caption: Optional[str] = None,
+        parse_mode: Optional[str] = None,
+        caption_entities: Optional[Any] = None,
+        disable_notification: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        reply_to_message_id: Optional[int] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        timeout: Optional[int] = None,
+        message_thread_id: Optional[int] = None,
+        has_spoiler: Optional[bool] = None,
+        thumb: Optional[Any] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет анимацию (GIF или видео без звука). Сигнатура один
+        в один с telebot.send_animation, но отдельного типа анимаций
+        в MAX нет — честная деградация:
+
+        - файл (байты, file-like, InputMedia) уходит обычным видео
+          через POST /uploads?type=video — придёт с content_type
+          "video", без GIF-семантики (зацикливание — на усмотрение
+          клиента MAX);
+        - http(s)-ссылка уходит вложением
+          {"type": "image", "payload": {"url": ...}} — MAX скачает
+          файл сам; придёт картинкой (content_type "photo"). URL
+          должен вести на изображение (gif/jpg/png): ссылка на
+          видеофайл не сработает — очевидные видеорасширения
+          (.mp4 и т. п., частый формат анимаций telebot) отрезаются
+          с ValueError, такой файл отправьте байтами;
+        - прочая строка — как file_id в telebot: токен ранее
+          загруженного видео, уходит без повторной загрузки.
+
+        Следствие: телеботовский обработчик content_types=['animation']
+        не сработает никогда — подписывайтесь на ['video'] (а для
+        URL-гифок — ['photo']); message_handler предупредит об этом
+        в логгере. Атрибут Message.animation остаётся None.
+
+        duration/width/height/thumbnail/thumb принимаются для
+        совместимости и игнорируются — MAX берёт метаданные из самого
+        файла; caption_entities, allow_sending_without_reply,
+        protect_content, message_thread_id и has_spoiler (спойлеров
+        в MAX нет) — тоже.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param animation: Анимация — байты, file-like объект,
+            InputMedia, http(s)-ссылка на файл или, как file_id
+            в telebot, строка-токен ранее загруженного видео
+        :type animation: Union[Any, str]
+
+        :param caption: Подпись к анимации
+        :type caption: Optional[str]
+
+        :param parse_mode: Разметка подписи (markdown/html). Если не
+            задана, берётся общая разметка бота
+        :type parse_mode: Optional[str]
+
+        :param disable_notification: True — отправить без звука
+        :type disable_notification: Optional[bool]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Клавиатура — добавляется вложением
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param timeout: Таймаут запроса POST /messages в секундах, как
+            в telebot; загрузку файла не покрывает — она идёт отдельными
+            запросами со своими таймаутами
+        :type timeout: Optional[int]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id
+        :type reply_parameters: Optional[Any]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        if self._check_text_length(text=caption):
+            raise ValueError(f'caption должен быть меньше 4000 символов.\nСейчас их {len(caption)}')
+        reply_to_message_id = self._resolve_reply_target(
+            reply_to_message_id, reply_parameters, "send_animation"
+        )
+        link = None
+        if reply_to_message_id:
+            link = {"type": "reply", "mid": reply_to_message_id}
+        final_attachments = []
+        if isinstance(animation, str) and animation.startswith(("http://", "https://")):
+            # видео по URL MAX не принимает, а картинку — скачает сам:
+            # гифка-ссылка деградирует до изображения; ссылка на видеофайл
+            # умерла бы непонятной серверной ошибкой — отрезаем понятной
+            path = animation.split("?", 1)[0].split("#", 1)[0].lower()
+            if path.endswith((".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")):
+                raise ValueError(
+                    "send_animation: MAX скачивает URL только как изображение "
+                    "(gif/jpg/png и т. п.) — ссылка на видеофайл не сработает "
+                    "(в telebot анимации часто именно .mp4). Видео-анимацию "
+                    "отправьте байтами или file-like объектом"
+                )
+            final_attachments.append({"type": "image", "payload": {"url": animation}})
+        elif isinstance(animation, InputMedia) and animation.type == "video":
+            final_attachments.append(animation.to_dict(api=self.api))
+        else:
+            final_attachments.append(
+                InputMedia(type="video", media=animation).to_dict(api=self.api)
+            )
+        if reply_markup:
+            if hasattr(reply_markup, 'to_attachment'):
+                final_attachments.append(reply_markup.to_attachment())
+            else:
+                final_attachments.append(reply_markup)
+        return self._send_attachments(
+            chat_id, caption, final_attachments,
+            self._resolve_parse_mode(parse_mode),
+            notify=not disable_notification,
+            link=link,
+            # как в telebot: timeout=0 означает «без своего таймаута»
+            timeout=timeout or None
+        )
+
+    def send_video_note(
+        self,
+        chat_id: Union[int, str],
+        data: Union[Any, str],
+        duration: Optional[int] = None,
+        length: Optional[int] = None,
+        reply_to_message_id: Optional[int] = None,
+        reply_markup: Union[InlineKeyboardMarkup, Any] = None,
+        disable_notification: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        thumbnail: Optional[Any] = None,
+        allow_sending_without_reply: Optional[bool] = None,
+        protect_content: Optional[bool] = None,
+        message_thread_id: Optional[int] = None,
+        thumb: Optional[Any] = None,
+        reply_parameters: Optional[Any] = None,
+    ) -> Message:
+        """
+        Отправляет видеосообщение («кружок»). Сигнатура один в один
+        с telebot.send_video_note (видео передаётся первым параметром
+        data — историческое имя telebot), но отдельного типа кружков
+        в MAX нет — файл уходит обычным видео через
+        POST /uploads?type=video и придёт прямоугольным, с content_type
+        "video". Строка — как file_id в telebot: токен ранее
+        загруженного видео, без повторной загрузки. URL-строка не
+        поддерживается (ValueError) — как и в telebot, где кружки
+        по URL не отправляются.
+
+        Следствие: телеботовский обработчик
+        content_types=['video_note'] не сработает никогда —
+        подписывайтесь на ['video'] (message_handler предупредит);
+        атрибут Message.video_note остаётся None.
+
+        duration/length/thumbnail/thumb принимаются для совместимости
+        и игнорируются — MAX берёт метаданные из самого файла;
+        allow_sending_without_reply, protect_content и
+        message_thread_id — тоже.
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param data: Видео — байты, file-like объект, InputMedia или,
+            как file_id в telebot, строка-токен ранее загруженного
+            видео. URL-строка не поддерживается (ValueError)
+        :type data: Union[Any, str]
+
+        :param duration: Принимается для совместимости и игнорируется
+        :type duration: Optional[int]
+
+        :param length: Диаметр кружка в telebot — принимается для
+            совместимости и игнорируется, в MAX видео прямоугольное
+        :type length: Optional[int]
+
+        :param reply_to_message_id: Идентификатор сообщения, на которое
+            ответить цитатой
+        :type reply_to_message_id: Optional[int]
+
+        :param reply_markup: Клавиатура — добавляется вложением
+        :type reply_markup: Union[InlineKeyboardMarkup, Any]
+
+        :param disable_notification: True — отправить без звука
+        :type disable_notification: Optional[bool]
+
+        :param timeout: Таймаут запроса POST /messages в секундах, как
+            в telebot; загрузку файла не покрывает — она идёт отдельными
+            запросами со своими таймаутами
+        :type timeout: Optional[int]
+
+        :param reply_parameters: Как в telebot: если передан объект с
+            message_id, он используется вместо reply_to_message_id
+        :type reply_parameters: Optional[Any]
+
+        :return: Отправленное сообщение
+        :rtype: Message
+        """
+        if isinstance(data, str) and data.startswith(("http://", "https://")):
+            raise ValueError(
+                "send_video_note: URL не поддерживается (как и в telebot — "
+                "кружки по URL не отправляются). Видео можно отправить "
+                "байтами, file-like объектом или строкой-токеном ранее "
+                "загруженного видео"
+            )
+        reply_to_message_id = self._resolve_reply_target(
+            reply_to_message_id, reply_parameters, "send_video_note"
+        )
+        link = None
+        if reply_to_message_id:
+            link = {"type": "reply", "mid": reply_to_message_id}
+        final_attachments = []
+        if isinstance(data, InputMedia) and data.type == "video":
+            final_attachments.append(data.to_dict(api=self.api))
+        else:
+            final_attachments.append(
+                InputMedia(type="video", media=data).to_dict(api=self.api)
+            )
+        if reply_markup:
+            if hasattr(reply_markup, 'to_attachment'):
+                final_attachments.append(reply_markup.to_attachment())
+            else:
+                final_attachments.append(reply_markup)
+        return self._send_attachments(
+            chat_id, None, final_attachments,
+            # подписи у кружка нет — text=None, разметка не уходит
+            None,
+            notify=not disable_notification,
+            link=link,
+            # как в telebot: timeout=0 означает «без своего таймаута»
+            timeout=timeout or None
         )
 
     def send_audio(
@@ -1454,7 +1700,8 @@ class MaxiBot:
         if isinstance(audio, str) and audio.startswith(("http://", "https://")):
             raise ValueError(
                 "MAX принимает URL только для изображений (send_photo). "
-                "Аудио можно отправить только байтами или file-like объектом"
+                "Аудио можно отправить байтами, file-like объектом или "
+                "строкой-токеном ранее загруженного аудио"
             )
         if reply_markup is not None:
             logger.warning(

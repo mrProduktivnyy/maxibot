@@ -788,8 +788,8 @@ class InputMedia(JsonDeserializable):
 
     :param media: Байты медиа; для фото — также строка: прямая
         http(s)-ссылка на изображение (MAX скачает его сам) или токен
-        ранее загруженного изображения (аналог file_id); для аудио —
-        строка-токен ранее загруженного аудио
+        ранее загруженного изображения (аналог file_id); для аудио и
+        видео — строка-токен ранее загруженного вложения
     :type media: Union[bytes, str]
 
     :param caption: Подпись к медиа
@@ -872,6 +872,17 @@ class InputMedia(JsonDeserializable):
             # во входящем вложении payload.token); URL для аудио MAX не
             # принимает — send_audio отрезает его раньше с ValueError
             return {"type": "audio", "payload": {"token": self.media}}
+        if self.type == "video" and isinstance(self.media, str):
+            # строка — токен ранее загруженного видео (аналог file_id);
+            # голые строки-URL send_video/send_animation/send_video_note
+            # отрезают раньше, а обёрнутые в InputMedia ловим здесь
+            if self.media.startswith(("http://", "https://")):
+                raise ValueError(
+                    "MAX принимает URL только для изображений (send_photo). "
+                    "Видео можно отправить байтами, file-like объектом или "
+                    "строкой-токеном ранее загруженного видео"
+                )
+            return {"type": "video", "payload": {"token": self.media}}
         upload = self._get_upload_url(type_attach=self.type)
         upload_url = upload.get("url")
         if not upload_url:
