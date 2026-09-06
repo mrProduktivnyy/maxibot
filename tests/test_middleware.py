@@ -402,7 +402,8 @@ bot._process_update({"update_type": "message_created", "timestamp": 175140000000
 assert typed_calls == [] and len(default_calls) == 1 and default_calls[0].message is None
 print('15 ok: без объекта своего типа middleware типа пропускаются')
 
-# 16. Payload, который парсер не понял (пост канала без sender): общий
+# 16. Payload, который парсер не понял (сообщение без recipient; посты
+#     каналов без sender с №14 парсятся и сюда не подходят): общий
 #     middleware всё равно получает Update с сырым json, ошибка логируется,
 #     до обработчиков обновление не доходит — как и раньше
 bot = make_bot()
@@ -415,14 +416,14 @@ def on_any_16(message):
     handled.append(message)
 
 
-channel_post = message_update()
-del channel_post["message"]["sender"]
+broken_update = message_update()
+del broken_update["message"]["recipient"]
 capture = _LogCapture()
 maxi_logger.addHandler(capture)
-bot._process_update(channel_post)
+bot._process_update(broken_update)
 maxi_logger.removeHandler(capture)
 assert len(default_calls) == 1 and default_calls[0].message is None
-assert default_calls[0].json is channel_post and handled == []
+assert default_calls[0].json is broken_update and handled == []
 logged = "\n".join(r.getMessage() for r in capture.records)
 assert "Error while parsing update message_created" in logged, logged
 print('16 ok: непонятный payload — общий middleware получает Update, ошибка логируется')

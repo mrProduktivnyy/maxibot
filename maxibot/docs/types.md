@@ -5,7 +5,7 @@ MAX API документация: https://dev.max.ru/docs-api/objects/Message
 **Параметры:**
 * **content_type** (`str`) - тип сообщения по именам telebot: `text`, `photo`, `video`, `audio`, `document`, `sticker`, `location`, `contact`; клавиатура и share-превью тип не определяют
 * **message_id** (`str`) - Уникальный ID сообщения
-* **from_user** (`maxibot.types.User`) - Пользователь, отправивший сообщение  
+* **from_user** (`maxibot.types.User`) - Пользователь, отправивший сообщение. У поста от имени канала (sender: null) — None, как в telebot  
 * **date** (`datetime`) - Время создания сообщения  
 * **chat** (`maxibot.types.Chat`) - Объект чата, в котором отправлено сообщение  
 * **reply_to_message** (`maxibot.types.Link`) - Сообщение, на которое ответили; None, если это не ответ  

@@ -226,7 +226,8 @@ chat = make_bot(api).get_chat(300)
 assert chat.type == "channel"
 assert chat.pinned_message.text == "пост" and chat.pinned_message.message_id == "mid.ch"
 assert chat.pinned_message.date is not None, "date закрепа потерян"
-assert chat.pinned_message.from_user.real_id is None
+# с №14 (каналы) у поста от имени канала from_user = None, как в telebot
+assert chat.pinned_message.from_user is None
 assert api.get_calls == 1, f"лишние GET /chats: {api.get_calls}"
 print("9 ok: канальный закреп с sender:null, date есть, GET один")
 

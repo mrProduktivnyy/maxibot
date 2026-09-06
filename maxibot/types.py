@@ -861,12 +861,14 @@ class User(JsonDeserializable):
             self.last_name = update.get("user").get("last_name")
             self.language_code = update.get("user_locale")
         else:
+            # sender по спеке nullable — у поста от имени канала его нет
+            sender = update.get("message").get("sender") or {}
             self.id = update.get("message").get("recipient").get("chat_id")
-            self.real_id = update.get("message").get("sender").get("user_id")
-            self.is_bot = update.get("message").get("sender").get("is_bot")
-            self.first_name = update.get("message").get("sender").get("first_name")
-            self.username = update.get("message").get("sender").get("name")
-            self.last_name = update.get("message").get("sender").get("last_name")
+            self.real_id = sender.get("user_id")
+            self.is_bot = sender.get("is_bot")
+            self.first_name = sender.get("first_name")
+            self.username = sender.get("name")
+            self.last_name = sender.get("last_name")
             self.language_code = update.get("user_locale")
 
 
@@ -1002,8 +1004,9 @@ class Chat(JsonDeserializable):
         if pinned:
             pinned_update = {
                 # sender по спеке может быть null (пост от имени
-                # канала) — User.__init__ такой null не переживает
-                "message": {**pinned, "sender": pinned.get("sender") or {}},
+                # канала) — Message тогда даёт from_user=None, как
+                # в telebot
+                "message": pinned,
                 # timestamp закрепа — на верхний уровень, где его ждёт
                 # Message._get_msg_timestamp (иначе date был бы None)
                 "timestamp": pinned.get("timestamp"),
@@ -1642,7 +1645,17 @@ class Message(JsonDeserializable):
             self.content_type: str = self._get_content_type(update=update)
             self.id: Optional[str] = self._get_msg_id(update=update)
             self.message_id: Optional[str] = self._get_msg_id(update=update)
-            self.from_user: Optional[User] = User(update=update)
+            message_payload = update.get("message")
+            if (isinstance(message_payload, dict)
+                    and message_payload.get("sender") is None
+                    and not update.get("callback")):
+                # пост от имени канала: sender null/отсутствует — как
+                # в telebot, у channel_post нет from_user. Именно is None:
+                # синтетический sender {} (результаты edit_*-методов,
+                # см. util.get_edit_message_data) даёт User, как раньше
+                self.from_user: Optional[User] = None
+            else:
+                self.from_user: Optional[User] = User(update=update)
             self.date: Optional[datetime] = self._get_msg_timestamp(update=update)
             self.chat: Chat = Chat(update=update, api=api)
             link = update.get("message", {}).get("link")
@@ -1868,6 +1881,12 @@ class Update(JsonDeserializable):
         self.message: Optional[Message] = None
         self.edited_message: Optional[Message] = None
         self.callback_query: Optional[CallbackQuery] = None
+        # телеботовские поля каналов: в MAX отдельного типа обновления
+        # нет, посты каналов лежат в message/edited_message — атрибуты
+        # всегда None, чтобы мигрантский `if update.channel_post:`
+        # не падал с AttributeError (философия _TELEBOT_ATTRIBUTES)
+        self.channel_post = None
+        self.edited_channel_post = None
         try:
             if self.update_type in (UpdateType.BOT_STARTED, UpdateType.BOT_ADDED) or \
                     self.update_type == UpdateType.MESSAGE_CREATED and "message" in update:
@@ -1879,9 +1898,9 @@ class Update(JsonDeserializable):
             elif self.update_type == UpdateType.MESSAGE_CALLBACK and "callback" in update:
                 self.callback_query = CallbackQuery(update=update, api=api)
         except Exception:
-            # payload, который парсер не понял (например, пост канала без
-            # sender): общие middleware всё равно получат Update с сырым json,
-            # а до обработчиков такое обновление не дойдёт — как и раньше
+            # payload, который парсер не понял (например, сообщение без
+            # recipient): общие middleware всё равно получат Update с сырым
+            # json, а до обработчиков такое обновление не дойдёт — как и раньше
             logger.error(
                 "Error while parsing update %s:\n%s", self.update_type, traceback.format_exc()
             )

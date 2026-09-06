@@ -155,7 +155,8 @@ assert msg.date is not None
 assert make_bot(FakeApi(pinned=None)).get_pinned_message(100) is None
 channel_pin = dict(PINNED, sender=None)
 msg = make_bot(FakeApi(pinned=channel_pin)).get_pinned_message(100)
-assert msg.message_id == "mid.pin" and msg.from_user.real_id is None
+# с №14 (каналы) у поста от имени канала from_user = None, как в telebot
+assert msg.message_id == "mid.pin" and msg.from_user is None
 print("7 ok: get_pinned_message — Message, None, канальный закреп")
 
 # 8. Wire-уровень: PUT/DELETE/GET на /chats/{chatId}/pin

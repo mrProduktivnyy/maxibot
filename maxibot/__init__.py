@@ -39,9 +39,12 @@ _TELEBOT_UPDATE_TYPES = {
     "callback_query": UpdateType.MESSAGE_CALLBACK,
 }
 
-# Типы обновлений telebot, которых в MAX нет (каналы, инлайн-режим, платежи,
+# Типы обновлений telebot, которых в MAX нет (инлайн-режим, платежи,
 # опросы, реакции): такой middleware регистрируется вхолостую с предупреждением,
-# чтобы перенесённый бот запускался — как с inline_handler
+# чтобы перенесённый бот запускался — как с inline_handler.
+# channel_post/edited_channel_post здесь про MIDDLEWARE: отдельного типа
+# обновления для каналов в MAX нет (посты приходят как message_created
+# с chat_type='channel'); сами обработчики channel_post_handler работают
 _TELEBOT_ONLY_UPDATE_TYPES = frozenset((
     "channel_post", "edited_channel_post", "inline_query", "chosen_inline_result",
     "shipping_query", "pre_checkout_query", "poll", "poll_answer", "my_chat_member",
@@ -250,6 +253,8 @@ class MaxiBot:
             self._worker_pool = None
         self.message_handlers = []
         self.edited_message_handlers = []
+        self.channel_post_handlers = []
+        self.edited_channel_post_handlers = []
         self.callback_query_handlers = []
         # middleware (см. middleware_handler): по типам обновлений MAX и общие.
         # Как в telebot, регистрация требует apihelper.ENABLE_MIDDLEWARE = True
@@ -592,6 +597,184 @@ class MaxiBot:
         )
         self.add_edited_message_handler(handler_dict)
 
+    def channel_post_handler(
+        self,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        content_types: Optional[List[str]] = None
+    ):
+        """
+        Декоратор обработчика постов каналов — как
+        telebot.channel_post_handler. Отдельного типа обновления для
+        каналов в MAX нет: пост приходит как message_created с типом
+        чата 'channel', и maxibot, как telebot, разводит их сам — посты
+        каналов попадают ТОЛЬКО сюда и не попадают в message_handler.
+        Фильтры как у message_handler (без content_types — только
+        текст); у поста от имени канала message.from_user равен None
+        (как в telebot).
+
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param content_types: Типы контента (по умолчанию ['text'])
+        """
+        content_types, commands = self._prepare_message_filters(content_types, commands)
+
+        def decorator(funcs: HandlerFunc):
+            handler_dict = self._build_handler_dict(
+                funcs,
+                content_types=content_types,
+                commands=commands,
+                regexp=regexp,
+                func=func
+            )
+            self.add_channel_post_handler(handler_dict)
+            return funcs
+        return decorator
+
+    def add_channel_post_handler(self, handler_dict):
+        """
+        Добавляет обработчик постов каналов напрямую — как
+        telebot.add_channel_post_handler
+
+        :param handler_dict: Словарь из _build_handler_dict
+        """
+        self.channel_post_handlers.append(handler_dict)
+
+    def register_channel_post_handler(
+        self,
+        callback: Callable,
+        content_types: Optional[List[str]] = None,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        pass_bot: Optional[bool] = False
+    ):
+        """
+        Недекораторная регистрация обработчика постов каналов — как
+        telebot.register_channel_post_handler. pass_bot=True — бот
+        приходит именованным аргументом bot. Как и в telebot, без
+        content_types register_ матчит посты любого типа (дефолт
+        ['text'] подставляют только декораторы).
+
+        :param callback: Функция-обработчик
+        :param content_types: Типы контента (None — все, как в telebot)
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        """
+        content_types, commands = self._prepare_message_filters(
+            content_types, commands, default_text=False)
+        handler_dict = self._build_handler_dict(
+            callback,
+            pass_bot=pass_bot,
+            content_types=content_types,
+            commands=commands,
+            regexp=regexp,
+            func=func
+        )
+        self.add_channel_post_handler(handler_dict)
+
+    def edited_channel_post_handler(
+        self,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        content_types: Optional[List[str]] = None
+    ):
+        """
+        Декоратор обработчика ПРАВОК постов каналов — как
+        telebot.edited_channel_post_handler: message_edited с типом
+        чата 'channel' попадает только сюда (не в
+        edited_message_handler). Остальное — как у channel_post_handler.
+
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param content_types: Типы контента (по умолчанию ['text'])
+        """
+        content_types, commands = self._prepare_message_filters(content_types, commands)
+
+        def decorator(funcs: HandlerFunc):
+            handler_dict = self._build_handler_dict(
+                funcs,
+                content_types=content_types,
+                commands=commands,
+                regexp=regexp,
+                func=func
+            )
+            self.add_edited_channel_post_handler(handler_dict)
+            return funcs
+        return decorator
+
+    def add_edited_channel_post_handler(self, handler_dict):
+        """
+        Добавляет обработчик правок постов каналов напрямую — как
+        telebot.add_edited_channel_post_handler
+
+        :param handler_dict: Словарь из _build_handler_dict
+        """
+        self.edited_channel_post_handlers.append(handler_dict)
+
+    def register_edited_channel_post_handler(
+        self,
+        callback: Callable,
+        content_types: Optional[List[str]] = None,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        pass_bot: Optional[bool] = False
+    ):
+        """
+        Недекораторная регистрация обработчика правок постов каналов —
+        как telebot.register_edited_channel_post_handler. Без
+        content_types матчит правки любого типа (как в telebot,
+        см. register_channel_post_handler).
+
+        :param callback: Функция-обработчик
+        :param content_types: Типы контента (None — все, как в telebot)
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        """
+        content_types, commands = self._prepare_message_filters(
+            content_types, commands, default_text=False)
+        handler_dict = self._build_handler_dict(
+            callback,
+            pass_bot=pass_bot,
+            content_types=content_types,
+            commands=commands,
+            regexp=regexp,
+            func=func
+        )
+        self.add_edited_channel_post_handler(handler_dict)
+
+    def process_new_channel_posts(self, new_channel_post: List[Message]):
+        """
+        Прогоняет посты каналов по обработчикам channel_post — как
+        telebot.process_new_channel_posts (публичная точка пайплайна)
+
+        :param new_channel_post: Список сообщений-постов
+        """
+        for message in new_channel_post:
+            self.run_handler(context=message,
+                             message_handlers=self.channel_post_handlers)
+
+    def process_new_edited_channel_posts(self, new_edited_channel_post: List[Message]):
+        """
+        Прогоняет правки постов каналов по обработчикам
+        edited_channel_post — как
+        telebot.process_new_edited_channel_posts
+
+        :param new_edited_channel_post: Список правок постов
+        """
+        for message in new_edited_channel_post:
+            self.run_handler(context=message,
+                             message_handlers=self.edited_channel_post_handlers)
+
     def middleware_handler(self, update_types: Optional[List[str]] = None):
         """
         Декоратор для регистрации middleware — функции, которую бот вызывает
@@ -643,9 +826,13 @@ class MaxiBot:
         :param update_types: Типы обновлений MAX, для которых вызывать
             middleware (все — в maxibot.util.update_types); телеботовские
             'message', 'edited_message' и 'callback_query' тоже принимаются,
-            а типы telebot, которых в MAX нет (channel_post, inline_query...),
+            а типы telebot, которых в MAX нет (inline_query, poll...),
             пропускаются с предупреждением в логе — перенесённый бот
-            запускается, как и с inline_handler. None — для всех обновлений
+            запускается, как и с inline_handler. 'channel_post' тоже
+            пропускается: отдельного типа обновления для каналов в MAX
+            нет, посты каналов приходят в middleware message_created
+            (сами обработчики channel_post_handler при этом работают).
+            None — для всех обновлений
         :type update_types: Optional[List[str]]
 
         :return: Декоратор, возвращающий функцию без изменений
@@ -897,7 +1084,8 @@ class MaxiBot:
             ) or (
                 # правки диспатчатся только при подписке: без обработчиков
                 # не строим Message зря (он ходит в API за названием чата)
-                update_type == UpdateType.MESSAGE_EDITED and bool(self.edited_message_handlers)
+                update_type == UpdateType.MESSAGE_EDITED
+                and bool(self.edited_message_handlers or self.edited_channel_post_handlers)
             )
             if not has_handlers and not (
                 self.default_middleware_handlers or self.typed_middleware_handlers.get(update_type)
@@ -909,15 +1097,26 @@ class MaxiBot:
             if not self.process_middlewares(upd):
                 return
             if upd.message is not None:
+                if getattr(upd.message.chat, "type", None) == "channel":
+                    # посты каналов — только в канальные обработчики, как
+                    # в telebot (до message_handlers и next_step не доходят;
+                    # у поста от имени канала from_user равен None)
+                    self.process_new_channel_posts([upd.message])
+                    return
                 # атомарный pop вместо `in` + pop: clear_step_handler может
                 # выполняться в воркере параллельно и убрать ключ между
-                # проверкой и извлечением — сообщение тогда потерялось бы
-                handler = self._next_steps.pop(upd.message.from_user.id, None)
+                # проверкой и извлечением — сообщение тогда потерялось бы;
+                # ключ — chat.id (см. register_next_step_handler), он же
+                # безопасен при from_user=None (sender null вне канала)
+                handler = self._next_steps.pop(upd.message.chat.id, None)
                 if handler is not None:
                     self._exec_task(handler.callback, upd.message, *handler.args, **handler.kwargs)
                 else:
                     self._process_text_message(upd.message)
             elif upd.edited_message is not None:
+                if getattr(upd.edited_message.chat, "type", None) == "channel":
+                    self.process_new_edited_channel_posts([upd.edited_message])
+                    return
                 self.run_handler(
                     context=upd.edited_message,
                     message_handlers=self.edited_message_handlers,
@@ -1028,7 +1227,11 @@ class MaxiBot:
             kwargs=kwargs,
             timestamp=time.time()
         )
-        self._next_steps[message.from_user.id] = handler
+        # ключ — chat.id, как в telebot (register_next_step_handler там
+        # делегирует в *_by_chat_id) и как clear_step_handler ниже;
+        # для входящих значение совпадает с from_user.id (User.id — это
+        # chat_id), а from_user=None (пост канала) не роняет регистрацию
+        self._next_steps[message.chat.id] = handler
 
     def clear_step_handler(self, message: Message) -> None:
         """
@@ -3995,11 +4198,12 @@ class MaxiBot:
         # проходят мимо guard'а клиента
         if not isinstance(pinned, dict):
             return None
-        # как в Chat.from_chat_info: sender по спеке может быть null
-        # (пост от имени канала), timestamp нужен наверху для date
+        # sender по спеке может быть null (пост от имени канала) —
+        # from_user тогда None, как в telebot; timestamp нужен наверху
+        # для date
         return Message(
             update={
-                "message": {**pinned, "sender": pinned.get("sender") or {}},
+                "message": pinned,
                 "timestamp": pinned.get("timestamp"),
             },
             api=self.api,
