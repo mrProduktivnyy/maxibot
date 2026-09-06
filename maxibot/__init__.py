@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 
 from maxibot import apihelper, util
 from maxibot.apihelper import Api
-from maxibot.types import Chat, ChatMember, Message, CallbackQuery, InputMedia, MessageID, Update
+from maxibot.types import Chat, ChatMember, ChatMemberUpdated, Message, CallbackQuery, InputMedia, MessageID, Update, User
 from maxibot.types import BotCommand, BotName, BotDescription, BotShortDescription
 from maxibot.types import File, Video
 from maxibot.types import UpdateType, InlineKeyboardMarkup
@@ -47,16 +47,43 @@ _TELEBOT_UPDATE_TYPES = {
 # с chat_type='channel'); сами обработчики channel_post_handler работают
 _TELEBOT_ONLY_UPDATE_TYPES = frozenset((
     "channel_post", "edited_channel_post", "inline_query", "chosen_inline_result",
-    "shipping_query", "pre_checkout_query", "poll", "poll_answer", "my_chat_member",
-    "chat_member", "chat_join_request", "message_reaction", "message_reaction_count",
+    "shipping_query", "pre_checkout_query", "poll", "poll_answer",
+    "chat_join_request", "message_reaction", "message_reaction_count",
     "chat_boost", "removed_chat_boost",
 ))
+
+# Телеботовские типы обновлений, которых в MAX нет как отдельных типов,
+# но объект для них maxibot синтезирует: middleware на них получает
+# ChatMemberUpdated, как в telebot (сами события приходят под именами
+# bot_added/bot_removed/... — на них тоже можно подписаться, но тогда
+# у bot_added/bot_started придёт Message: они обрабатываются
+# и как сообщения)
+_SYNTHETIC_MIDDLEWARE_TYPES = ("my_chat_member", "chat_member")
+
+# «значения нет» там, где None — законное значение
+_UNSET = object()
 
 # Типы обновлений, у которых есть свой объект (Message или CallbackQuery)
 _OBJECT_UPDATE_TYPES = (
     UpdateType.MESSAGE_CREATED, UpdateType.BOT_STARTED, UpdateType.BOT_ADDED,
     UpdateType.MESSAGE_EDITED, UpdateType.MESSAGE_CALLBACK,
 )
+
+# Переходы статуса для событий членства (old -> new). my_chat_member —
+# статус самого бота: bot_started/bot_stopped — аналог разблокировки/
+# блокировки бота пользователем в Telegram (kicked <-> member);
+# chat_member — другие участники (только вход/выход, промоуты в MAX
+# не видны)
+_MY_CHAT_MEMBER_TRANSITIONS = {
+    UpdateType.BOT_ADDED: ("left", "member"),
+    UpdateType.BOT_REMOVED: ("member", "left"),
+    UpdateType.BOT_STARTED: ("kicked", "member"),
+    UpdateType.BOT_STOPPED: ("member", "kicked"),
+}
+_CHAT_MEMBER_TRANSITIONS = {
+    UpdateType.USER_ADDED: ("left", "member"),
+    UpdateType.USER_REMOVED: ("member", "left"),
+}
 
 # Маппинг действий telebot.send_chat_action в действия MAX
 # (POST /chats/{chatId}/actions, enum SenderAction: typing_on, sending_photo,
@@ -256,9 +283,21 @@ class MaxiBot:
         self.channel_post_handlers = []
         self.edited_channel_post_handlers = []
         self.callback_query_handlers = []
+        self.my_chat_member_handlers = []
+        self.chat_member_handlers = []
+        # user-объект самого бота для old/new_chat_member событий
+        # my_chat_member; GET /me один раз при первом событии
+        self._bot_member_payload = None
+        # (chat_id, timestamp) последнего bot_added: MAX присылает это
+        # обновление дважды подряд — точный дубль отсеиваем. Ключ с
+        # timestamp, чтобы законное повторное добавление в тот же чат
+        # прошло; _UNSET, а не None — chat_id тоже бывает пустым
+        self._prev_bot_added = _UNSET
         # middleware (см. middleware_handler): по типам обновлений MAX и общие.
         # Как в telebot, регистрация требует apihelper.ENABLE_MIDDLEWARE = True
-        self.typed_middleware_handlers: Dict[str, List[Callable]] = {t: [] for t in util.update_types}
+        self.typed_middleware_handlers: Dict[str, List[Callable]] = {
+            t: [] for t in tuple(util.update_types) + _SYNTHETIC_MIDDLEWARE_TYPES
+        }
         self.default_middleware_handlers: List[Callable] = []
         self.poll = None
         self._webhook: WebhookServer = None
@@ -421,10 +460,57 @@ class MaxiBot:
         self.is_running = True
         self.poll = Polling(
             api=self.api,
-            allowed_updates=allowed_updates,
+            allowed_updates=self._normalize_allowed_updates(allowed_updates),
             on_error=self._report_exception,
         )
         await self.poll.loop(self._process_update)
+
+    @staticmethod
+    def _normalize_allowed_updates(allowed_updates):
+        """
+        Переводит телеботовские имена типов обновлений в имена MAX —
+        список уходит в GET /updates как есть, и телеботовский
+        allowed_updates=['message', 'my_chat_member'] иначе отфильтровал
+        бы вообще всё. 'message' -> message_created и т.п.;
+        'my_chat_member' -> четыре события бота, 'chat_member' -> два
+        события участников; типы, которых в MAX нет (inline_query,
+        poll...), отбрасываются с предупреждением. None остаётся None
+        (все обновления)
+        """
+        if not allowed_updates:
+            return allowed_updates
+        if isinstance(allowed_updates, str):
+            allowed_updates = [allowed_updates]
+        expanded, unsupported, unknown = [], [], []
+        for update_type in allowed_updates:
+            if update_type in util.update_types:
+                expanded.append(update_type)
+            elif update_type in _TELEBOT_UPDATE_TYPES:
+                expanded.append(_TELEBOT_UPDATE_TYPES[update_type])
+            elif update_type == "my_chat_member":
+                expanded.extend(_MY_CHAT_MEMBER_TRANSITIONS)
+            elif update_type == "chat_member":
+                expanded.extend(_CHAT_MEMBER_TRANSITIONS)
+            elif update_type in ("channel_post", "edited_channel_post"):
+                # посты каналов приходят обычными сообщениями
+                expanded.append(UpdateType.MESSAGE_CREATED
+                                if update_type == "channel_post"
+                                else UpdateType.MESSAGE_EDITED)
+            elif update_type in _TELEBOT_ONLY_UPDATE_TYPES:
+                unsupported.append(update_type)
+            else:
+                unknown.append(update_type)
+        if unsupported:
+            logger.warning(
+                "allowed_updates: обновлений %s в MAX нет — они убраны "
+                "из подписки", ", ".join(unsupported)
+            )
+        if unknown:
+            logger.warning(
+                "allowed_updates: неизвестные типы %s убраны из подписки; "
+                "доступны: %s", ", ".join(unknown), ", ".join(util.update_types)
+            )
+        return list(dict.fromkeys(expanded))
 
     @staticmethod
     def _prepare_message_filters(content_types, commands, default_text=True):
@@ -775,6 +861,129 @@ class MaxiBot:
             self.run_handler(context=message,
                              message_handlers=self.edited_channel_post_handlers)
 
+    def my_chat_member_handler(self, func=None):
+        """
+        Декоратор обработчика изменений статуса САМОГО БОТА — как
+        telebot.my_chat_member_handler. Обработчик получает
+        types.ChatMemberUpdated, синтезированный из обновлений MAX:
+
+        - bot_added / bot_removed — бота добавили в чат / удалили
+          (left -> member / member -> left);
+        - bot_started — пользователь нажал «Начать» (kicked -> member,
+          аналог разблокировки; /start-сообщение при этом тоже
+          диспатчится, как обычно);
+        - bot_stopped — пользователь остановил бота (member -> kicked,
+          аналог блокировки — главный сценарий my_chat_member
+          в telebot).
+
+        Фильтр только func, как в telebot.
+
+        :param func: Функция-фильтр по ChatMemberUpdated
+        """
+        def decorator(funcs: HandlerFunc):
+            handler_dict = self._build_handler_dict(funcs, func=func)
+            self.add_my_chat_member_handler(handler_dict)
+            return funcs
+        return decorator
+
+    def add_my_chat_member_handler(self, handler_dict):
+        """
+        Добавляет обработчик статуса бота напрямую — как
+        telebot.add_my_chat_member_handler
+
+        :param handler_dict: Словарь из _build_handler_dict
+        """
+        self.my_chat_member_handlers.append(handler_dict)
+
+    def register_my_chat_member_handler(
+        self,
+        callback: Callable,
+        func: Optional[Callable] = None,
+        pass_bot: Optional[bool] = False
+    ):
+        """
+        Недекораторная регистрация обработчика статуса бота — как
+        telebot.register_my_chat_member_handler; pass_bot=True — бот
+        приходит именованным аргументом bot.
+
+        :param callback: Функция-обработчик (ChatMemberUpdated)
+        :param func: Функция-фильтр
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        """
+        handler_dict = self._build_handler_dict(
+            callback, pass_bot=pass_bot, func=func)
+        self.add_my_chat_member_handler(handler_dict)
+
+    def chat_member_handler(self, func=None):
+        """
+        Декоратор обработчика изменений статуса ДРУГИХ участников — как
+        telebot.chat_member_handler. Синтезируется из user_added
+        (left -> member) и user_removed (member -> left); события
+        приходят только в чатах, где бот администратор (условие MAX).
+        В отличие от Telegram видны только вход/выход — промоуты
+        и ограничения событий не порождают. from_user — кто добавил/
+        удалил (по ссылке вошёл или сам вышел — сам пользователь).
+        В telebot этот тип требует allowed_updates — в MAX события
+        приходят сами, ничего включать не нужно. Фильтр только func.
+
+        :param func: Функция-фильтр по ChatMemberUpdated
+        """
+        def decorator(funcs: HandlerFunc):
+            handler_dict = self._build_handler_dict(funcs, func=func)
+            self.add_chat_member_handler(handler_dict)
+            return funcs
+        return decorator
+
+    def add_chat_member_handler(self, handler_dict):
+        """
+        Добавляет обработчик статуса участников напрямую — как
+        telebot.add_chat_member_handler
+
+        :param handler_dict: Словарь из _build_handler_dict
+        """
+        self.chat_member_handlers.append(handler_dict)
+
+    def register_chat_member_handler(
+        self,
+        callback: Callable,
+        func: Optional[Callable] = None,
+        pass_bot: Optional[bool] = False
+    ):
+        """
+        Недекораторная регистрация обработчика статуса участников — как
+        telebot.register_chat_member_handler; pass_bot=True — бот
+        приходит именованным аргументом bot.
+
+        :param callback: Функция-обработчик (ChatMemberUpdated)
+        :param func: Функция-фильтр
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        """
+        handler_dict = self._build_handler_dict(
+            callback, pass_bot=pass_bot, func=func)
+        self.add_chat_member_handler(handler_dict)
+
+    def process_new_my_chat_member(self, new_my_chat_members: List[ChatMemberUpdated]):
+        """
+        Прогоняет события статуса бота по обработчикам my_chat_member —
+        как telebot.process_new_my_chat_member
+
+        :param new_my_chat_members: Список ChatMemberUpdated
+        """
+        for member_updated in new_my_chat_members:
+            self.run_handler(context=member_updated,
+                             message_handlers=self.my_chat_member_handlers)
+
+    def process_new_chat_member(self, new_chat_members: List[ChatMemberUpdated]):
+        """
+        Прогоняет события статуса участников по обработчикам
+        chat_member — как telebot.process_new_chat_member
+
+        :param new_chat_members: Список ChatMemberUpdated
+        """
+        for member_updated in new_chat_members:
+            self.run_handler(context=member_updated,
+                             message_handlers=self.chat_member_handlers)
+
     def middleware_handler(self, update_types: Optional[List[str]] = None):
         """
         Декоратор для регистрации middleware — функции, которую бот вызывает
@@ -826,13 +1035,18 @@ class MaxiBot:
         :param update_types: Типы обновлений MAX, для которых вызывать
             middleware (все — в maxibot.util.update_types); телеботовские
             'message', 'edited_message' и 'callback_query' тоже принимаются,
-            а типы telebot, которых в MAX нет (inline_query, poll...),
-            пропускаются с предупреждением в логе — перенесённый бот
-            запускается, как и с inline_handler. 'channel_post' тоже
-            пропускается: отдельного типа обновления для каналов в MAX
-            нет, посты каналов приходят в middleware message_created
-            (сами обработчики channel_post_handler при этом работают).
-            None — для всех обновлений
+            как и 'my_chat_member'/'chat_member' — такой middleware
+            получает ChatMemberUpdated, как в telebot (сами события
+            приходят под именами bot_added/bot_removed/bot_started/
+            bot_stopped и user_added/user_removed — на них тоже можно
+            подписаться, но у bot_added/bot_started придёт Message: они
+            обрабатываются и как сообщения). Типы telebot, которых в MAX
+            нет (inline_query, poll...), пропускаются с предупреждением
+            в логе — перенесённый бот запускается, как и с inline_handler.
+            'channel_post' тоже пропускается: отдельного типа обновления
+            для каналов в MAX нет, посты каналов приходят в middleware
+            message_created (сами обработчики channel_post_handler при
+            этом работают). None — для всех обновлений
         :type update_types: Optional[List[str]]
 
         :return: Декоратор, возвращающий функцию без изменений
@@ -883,7 +1097,7 @@ class MaxiBot:
             raise ValueError(
                 f"Нет таких типов обновлений в MAX: {', '.join(map(repr, unknown))}. "
                 f"Доступны: {', '.join(util.update_types)}; из telebot принимаются "
-                f"{', '.join(_TELEBOT_UPDATE_TYPES)}"
+                f"{', '.join(tuple(_TELEBOT_UPDATE_TYPES) + _SYNTHETIC_MIDDLEWARE_TYPES)}"
             )
         if unsupported:
             name = getattr(handler, "__name__", repr(handler))
@@ -1005,6 +1219,18 @@ class MaxiBot:
                     if not self._test_filter(message_filter, filter_value, context):
                         return False
                 return True
+            elif isinstance(context, ChatMemberUpdated):
+                # у my_chat_member/chat_member единственный фильтр —
+                # func (как в telebot)
+                func_filter = handler['filters'].get('func')
+                if func_filter:
+                    try:
+                        return bool(func_filter(context))
+                    except Exception as e:
+                        # ошибка func-фильтра не роняет диспатч
+                        self._report_exception(e, "Error in filter function")
+                        return False
+                return True
             return False
 
     def _process_text_message(self, context: Message):
@@ -1059,7 +1285,23 @@ class MaxiBot:
             for middleware in self.typed_middleware_handlers.get(update_type, []):
                 if middleware not in typed:
                     typed.append(middleware)
-        calls = [(m, context) for m in typed] + [(m, update) for m in self.default_middleware_handlers]
+        calls = [(m, context) for m in typed]
+        # телеботовские my_chat_member/chat_member: middleware этих типов
+        # получает ChatMemberUpdated, как в telebot (объект построен —
+        # см. _process_update). Дедупликация по ПАРЕ «функция + объект»:
+        # функция, подписанная и на 'message', и на 'my_chat_member',
+        # должна получить оба объекта — в telebot это разные обновления
+        for synthetic_type, synthetic_context in (
+            ("my_chat_member", update.my_chat_member),
+            ("chat_member", update.chat_member),
+        ):
+            if synthetic_context is None:
+                continue
+            for middleware in self.typed_middleware_handlers.get(synthetic_type, []):
+                if not any(m is middleware and ctx is synthetic_context
+                           for m, ctx in calls):
+                    calls.append((middleware, synthetic_context))
+        calls += [(m, update) for m in self.default_middleware_handlers]
         for middleware, ctx in calls:
             try:
                 middleware(self, ctx)
@@ -1068,6 +1310,134 @@ class MaxiBot:
                 self._report_exception(e, f"Error in middleware {name}, update skipped")
                 return False
         return True
+
+    @staticmethod
+    def _event_user(payload: Dict[str, Any], locale: Optional[str] = None) -> User:
+        """
+        User из user-объекта обновления членства. Как у ChatMember.user,
+        id здесь — НАСТОЯЩИЙ id пользователя (сравнения вида
+        from_user.id == user_id работают)
+
+        :param payload: Объект user обновления
+        :param locale: user_locale обновления (есть у bot_started
+            и bot_stopped) — заполняет language_code, как у
+            message.from_user того же обновления
+        """
+        user = User.__new__(User)
+        user.id = payload.get("user_id")
+        user.real_id = payload.get("user_id")
+        user.is_bot = payload.get("is_bot")
+        user.first_name = payload.get("first_name")
+        user.last_name = payload.get("last_name")
+        user.username = payload.get("username") or payload.get("name")
+        user.language_code = locale
+        return user
+
+    def _get_bot_member_payload(self) -> Dict[str, Any]:
+        """
+        User-словарь самого бота — для old/new_chat_member событий
+        my_chat_member (там затронутый участник — бот). GET /me один
+        раз, дальше кэш; при сетевой ошибке событие не теряется —
+        уйдёт с пустым user, кэш не портится (попробуем в следующий раз)
+        """
+        if self._bot_member_payload is None:
+            try:
+                info = self.api.get_bot_info()
+            except Exception as e:
+                logger.warning(
+                    "my_chat_member: не удалось получить данные бота "
+                    "(GET /me): %s", e
+                )
+                return {}
+            if isinstance(info, dict):
+                self._bot_member_payload = info
+            else:
+                return {}
+        return self._bot_member_payload
+
+    def _build_chat_member_updated(self, update: Dict[str, Any]) -> ChatMemberUpdated:
+        """
+        Синтезирует телеботовский ChatMemberUpdated из обновления
+        членства MAX (bot_added/bot_removed/bot_started/bot_stopped/
+        user_added/user_removed) — см. карты переходов
+        _MY_CHAT_MEMBER_TRANSITIONS / _CHAT_MEMBER_TRANSITIONS
+        """
+        update_type = update.get("update_type")
+        actor = update.get("user") or {}
+
+        # лёгкий Chat без похода в API: у bot_removed бот уже удалён
+        # из чата — GET /chats мог бы вернуть 403
+        chat = Chat.__new__(Chat)
+        for attribute in Chat._TELEBOT_ATTRIBUTES:
+            setattr(chat, attribute, None)
+        chat.api = self.api
+        chat.id = update.get("chat_id")
+        chat.user_id = None
+        if update_type in (UpdateType.BOT_STARTED, UpdateType.BOT_STOPPED):
+            raw_type = "dialog"
+        else:
+            raw_type = "channel" if update.get("is_channel") else "chat"
+        # телеботовские имена, как у get_chat (private/group/channel) —
+        # ChatMemberUpdated целиком телеботовский тип; сырой тип MAX
+        # остаётся только у message.chat (историческое поведение)
+        chat.type = Chat._CHAT_TYPE_MAP.get(raw_type, raw_type)
+
+        if update_type in _MY_CHAT_MEMBER_TRANSITIONS:
+            old_status, new_status = _MY_CHAT_MEMBER_TRANSITIONS[update_type]
+            # затронутый участник — сам бот; инициатор — user обновления.
+            # user_locale есть у bot_started/bot_stopped — язык
+            # инициатора заполняем, как в message.from_user
+            member_payload = self._get_bot_member_payload()
+            from_user = self._event_user(actor, locale=update.get("user_locale"))
+        else:
+            old_status, new_status = _CHAT_MEMBER_TRANSITIONS[update_type]
+            # затронутый — user обновления; инициатор — inviter_id/
+            # admin_id, а если их нет (вошёл по ссылке / сам вышел) —
+            # сам пользователь, как в Telegram. Проверка по наличию,
+            # а не по истинности: id 0 — это тоже инициатор
+            member_payload = actor
+            performer_id = update.get("inviter_id")
+            if performer_id is None:
+                performer_id = update.get("admin_id")
+            if performer_id is None or performer_id == actor.get("user_id"):
+                # инициатора нет (вошёл по ссылке / сам вышел) либо это
+                # сам затронутый — берём его целиком, с именем
+                from_user = self._event_user(actor)
+            else:
+                # от постороннего инициатора MAX присылает только id
+                from_user = self._event_user({"user_id": performer_id})
+
+        timestamp = update.get("timestamp")
+        member_updated = ChatMemberUpdated(
+            chat=chat,
+            from_user=from_user,
+            # unix-секунды, как в telebot (timestamp MAX — миллисекунды);
+            # нечисловой timestamp не должен ронять событие
+            date=(int(timestamp) // 1000
+                  if isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool)
+                  else None),
+            old_chat_member=ChatMember(member_payload, status=old_status),
+            new_chat_member=ChatMember(member_payload, status=new_status),
+        )
+        member_updated.is_channel = update.get("is_channel")
+        member_updated.json = update
+        return member_updated
+
+    def _build_member_updated_safe(self, update: Dict[str, Any]) -> Optional[ChatMemberUpdated]:
+        """
+        _build_chat_member_updated с той же страховкой, что у разбора
+        Update: непонятный payload логируется, но не отменяет обработку
+        обновления — общие middleware и message-ветки отработают, как
+        до появления обработчиков членства
+        """
+        try:
+            return self._build_chat_member_updated(update)
+        except Exception:
+            logger.error(
+                "Error while building ChatMemberUpdated for %s:\n%s",
+                update.get("update_type"), traceback.format_exc()
+            )
+            return None
 
     def _process_update(self, update: Dict[str, Any]):
         """
@@ -1079,6 +1449,17 @@ class MaxiBot:
         """
         try:
             update_type = update.get("update_type")
+            if update_type == UpdateType.BOT_ADDED:
+                # MAX присылает bot_added дважды подряд — точный дубль
+                # (тот же чат и то же время) пропускаем. Здесь, а не
+                # в поллинге: через webhook обновления идут этим же
+                # путём, и дубль доходил бы до обработчиков
+                key = (update.get("chat_id"), update.get("timestamp"))
+                if self._prev_bot_added is not _UNSET and key == self._prev_bot_added:
+                    return
+                self._prev_bot_added = key
+            else:
+                self._prev_bot_added = _UNSET
             has_handlers = update_type in (
                 UpdateType.MESSAGE_CREATED, UpdateType.BOT_STARTED, UpdateType.BOT_ADDED, UpdateType.MESSAGE_CALLBACK
             ) or (
@@ -1086,6 +1467,16 @@ class MaxiBot:
                 # не строим Message зря (он ходит в API за названием чата)
                 update_type == UpdateType.MESSAGE_EDITED
                 and bool(self.edited_message_handlers or self.edited_channel_post_handlers)
+            ) or (
+                # события членства — тоже только при подписке: обработчик
+                # или телеботовский middleware my_chat_member/chat_member
+                update_type in (UpdateType.BOT_REMOVED, UpdateType.BOT_STOPPED)
+                and bool(self.my_chat_member_handlers
+                         or self.typed_middleware_handlers.get("my_chat_member"))
+            ) or (
+                update_type in (UpdateType.USER_ADDED, UpdateType.USER_REMOVED)
+                and bool(self.chat_member_handlers
+                         or self.typed_middleware_handlers.get("chat_member"))
             )
             if not has_handlers and not (
                 self.default_middleware_handlers or self.typed_middleware_handlers.get(update_type)
@@ -1094,8 +1485,40 @@ class MaxiBot:
                 # строим: Message ради названия чата ходит в API
                 return
             upd = Update(update, self.api)
+            # события членства -> телеботовский ChatMemberUpdated. Строим
+            # только для тех, кто объект увидит: обработчики членства,
+            # middleware my_chat_member/chat_member и общие middleware
+            # (им приходит Update целиком) — иначе не дёргаем GET /me
+            # middleware сырого типа MAX видит Update (и объект в нём)
+            # только у не-объектных типов: у bot_added/bot_started
+            # ему приходит Message — там строить незачем
+            raw_type_sees_update = (
+                update_type not in _OBJECT_UPDATE_TYPES
+                and self.typed_middleware_handlers.get(update_type)
+            )
+            if update_type in _MY_CHAT_MEMBER_TRANSITIONS:
+                if (self.my_chat_member_handlers
+                        or self.default_middleware_handlers
+                        or self.typed_middleware_handlers.get("my_chat_member")
+                        or raw_type_sees_update):
+                    upd.my_chat_member = self._build_member_updated_safe(update)
+            elif update_type in _CHAT_MEMBER_TRANSITIONS:
+                if (self.chat_member_handlers
+                        or self.default_middleware_handlers
+                        or self.typed_middleware_handlers.get("chat_member")
+                        or raw_type_sees_update):
+                    upd.chat_member = self._build_member_updated_safe(update)
             if not self.process_middlewares(upd):
                 return
+            if upd.my_chat_member is not None:
+                # до message-веток: у bot_started/bot_added событие статуса
+                # ставится в очередь ПЕРЕД /start-сообщением (при
+                # threaded=True фактический порядок выполнения не
+                # гарантирован — обработчики уходят в пул);
+                # message-пайплайн ниже не отменяется
+                self.process_new_my_chat_member([upd.my_chat_member])
+            if upd.chat_member is not None:
+                self.process_new_chat_member([upd.chat_member])
             if upd.message is not None:
                 if getattr(upd.message.chat, "type", None) == "channel":
                     # посты каналов — только в канальные обработчики, как

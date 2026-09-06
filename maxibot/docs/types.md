@@ -57,14 +57,24 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 ## class maxibot.types.ChatMember(member: Dict[str, Any], status: Optional[str])
 Участник чата — результат get_chat_member, get_chat_administrators и get_chat_membership; собирается из объекта ChatMember MAX (GET /chats/{chatId}/members)  
 **Параметры:**
-* **status** (`str`) - Телеботовский статус: 'creator' (владелец), 'administrator', 'member'; 'left' — пользователя в чате нет  
+* **status** (`str`) - Телеботовский статус: 'creator' (владелец), 'administrator', 'member'; 'left' — пользователя в чате нет; 'kicked' — в событиях my_chat_member (блокировка бота)  
 * **user** (`User`) - Пользователь; здесь user.id — НАСТОЯЩИЙ id пользователя (в отличие от message.from_user.id, где исторически id чата)  
 * **custom_title** (`str`) - Титул админа (alias MAX)  
 * **can_change_info, can_pin_messages, can_invite_users, can_restrict_members, can_promote_members, can_post_messages, can_edit_messages, can_delete_messages, can_manage_video_chats** (`bool`) - Флаги из прав MAX (add_remove_members взводит и can_invite_users, и can_restrict_members); у владельца все True, у обычного участника — None, как в telebot  
 * **can_manage_chat** (`bool`) - У админа и владельца всегда True (телеграмный инвариант «implied by any other administrator privilege»)  
-* **is_member** (`bool`) - False только у заглушки 'left'  
+* **is_member** (`bool`) - False у 'left' и 'kicked'  
 
 Остальные атрибуты telebot.types.ChatMember существуют и равны None (until_date, is_anonymous, can_send_* и т.п.). Дополнительно сырые поля MAX: is_owner, is_admin, permissions (список прав как пришёл — в нём видны edit_link и view_stats, телеботовских флагов для них нет), alias, last_access_time, join_time, description (описание профиля), avatar_url, full_avatar_url  
+## class maxibot.types.ChatMemberUpdated(chat, from_user, date, old_chat_member, new_chat_member, invite_link, via_chat_folder_invite_link)
+Изменение статуса участника — как telebot.types.ChatMemberUpdated (включая property difference). Синтезируется из обновлений MAX: my_chat_member — bot_added/bot_removed (left↔member), bot_started/bot_stopped (kicked↔member, аналог разблокировки/блокировки); chat_member — user_added/user_removed (left↔member)  
+**Параметры:**
+* **chat** (`Chat`) - Чат события (лёгкий: id и type, без похода в API — у bot_removed бот уже удалён из чата). type — телеботовский: private/group/channel (в отличие от message.chat.type, где исторически сырые dialog/chat/channel)  
+* **from_user** (`User`) - Инициатор (кто добавил/удалил); по ссылке вошёл/сам вышел — сам пользователь, со всеми полями. id — идентификатор ПОЛЬЗОВАТЕЛЯ, а не чата (в отличие от message.from_user.id): для ответа берите chat.id. Когда инициатор пришёл как inviter_id/admin_id (посторонний), известен только его id — имени и username MAX не присылает; language_code заполняется лишь у bot_started/bot_stopped (там есть user_locale)  
+* **difference** (`property`) - Разница old/new в формате telebot ({'status': ['left', 'member']}); производное is_member в разницу не попадает — как и в telebot  
+* **date** (`int`) - Unix-время в СЕКУНДАХ, как в telebot (не datetime, в отличие от Message.date)  
+* **old_chat_member / new_chat_member** (`ChatMember`) - Статусы затронутого (у my_chat_member — сам бот; его данные берутся из GET /me один раз с кэшем)  
+* **invite_link / via_chat_folder_invite_link** - Всегда None (в MAX таких сущностей нет)  
+* **is_channel** (`bool`) - Флаг MAX; **json** — сырое обновление (deep-link кнопки «Начать» — в json['payload'])  
 ## class maxibot.types.BotCommand(command: str, description: Optional[str])
 Команда бота — как telebot.types.BotCommand. В MAX у команды поле name; при отправке ведущий '/' срезается (лимиты: имя 64, описание 128 символов). description, в отличие от telebot, необязателен  
 **Параметры:**

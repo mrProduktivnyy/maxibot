@@ -1109,7 +1109,8 @@ class ChatMember(JsonDeserializable):
         else:
             self.status = "member"
 
-        self.is_member = self.status != "left"
+        # kicked (заблокировал бота / забанен) — тоже не участник
+        self.is_member = self.status not in ("left", "kicked")
         self.custom_title = member.get("alias")
 
         if self.status == "creator":
@@ -1141,6 +1142,61 @@ class ChatMember(JsonDeserializable):
         self.description = member.get("description")
         self.avatar_url = member.get("avatar_url")
         self.full_avatar_url = member.get("full_avatar_url")
+
+
+class ChatMemberUpdated(JsonDeserializable):
+    """
+    Изменение статуса участника чата — как telebot.types.ChatMemberUpdated.
+    В maxibot синтезируется из обновлений членства MAX:
+
+    - my_chat_member (статус самого бота): bot_added (left -> member),
+      bot_removed (member -> left), bot_started (kicked -> member —
+      аналог разблокировки в Telegram), bot_stopped (member -> kicked —
+      аналог блокировки бота пользователем);
+    - chat_member (другие участники): user_added (left -> member),
+      user_removed (member -> left).
+
+    from_user — инициатор события (кто добавил/удалил; у user_added
+    по ссылке и user_removed «сам вышел» — сам пользователь);
+    old_chat_member/new_chat_member — ChatMember затронутого
+    (у my_chat_member это сам бот). date — unix-время в секундах,
+    как в telebot. invite_link/via_chat_folder_invite_link всегда None
+    (таких сущностей в MAX нет). Дополнительно: is_channel (флаг MAX)
+    и json — сырое обновление (deep-link кнопки «Начать» — в
+    json['payload']).
+    """
+
+    def __init__(self, chat, from_user, date, old_chat_member,
+                 new_chat_member, invite_link=None,
+                 via_chat_folder_invite_link=None):
+        self.chat = chat
+        self.from_user = from_user
+        self.date = date
+        self.old_chat_member = old_chat_member
+        self.new_chat_member = new_chat_member
+        self.invite_link = invite_link
+        self.via_chat_folder_invite_link = via_chat_folder_invite_link
+        self.is_channel = None
+        self.json = None
+
+    @property
+    def difference(self) -> Dict[str, List]:
+        """
+        Разница old_chat_member/new_chat_member в формате telebot:
+        {'параметр': [старое, новое]}, например
+        {'status': ['left', 'member']}
+        """
+        old = self.old_chat_member.__dict__
+        new = self.new_chat_member.__dict__
+        dif = {}
+        for key in new:
+            # is_member — производное от status (в telebot его в разнице
+            # не бывает); user пропускает и telebot
+            if key in ("user", "is_member"):
+                continue
+            if new[key] != old[key]:
+                dif[key] = [old[key], new[key]]
+        return dif
 
 
 class BotCommand(JsonDeserializable):
@@ -1887,6 +1943,11 @@ class Update(JsonDeserializable):
         # не падал с AttributeError (философия _TELEBOT_ATTRIBUTES)
         self.channel_post = None
         self.edited_channel_post = None
+        # события членства: ChatMemberUpdated сюда подставляет
+        # MaxiBot._process_update — при построении нужен кэш данных
+        # бота, которого у Update нет; без подписки остаются None
+        self.my_chat_member = None
+        self.chat_member = None
         try:
             if self.update_type in (UpdateType.BOT_STARTED, UpdateType.BOT_ADDED) or \
                     self.update_type == UpdateType.MESSAGE_CREATED and "message" in update:

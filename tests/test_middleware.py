@@ -350,9 +350,12 @@ print('12 ok: middleware выполняется и перед next_step-обра
 
 # 13. Ключи typed_middleware_handlers — все типы обновлений MAX из
 #     maxibot.util.update_types (сам список сверен с документацией в
-#     tests/test_update_types.py)
-assert set(MaxiBot("t").typed_middleware_handlers) == set(update_types) and len(update_types) == 18
-print('13 ok: middleware принимает все типы обновлений MAX')
+#     tests/test_update_types.py) плюс два телеботовских синтетических
+#     типа членства, для которых maxibot строит ChatMemberUpdated
+assert len(update_types) == 18
+assert set(MaxiBot("t").typed_middleware_handlers) == set(update_types) | {
+    "my_chat_member", "chat_member"}
+print('13 ok: middleware принимает все типы обновлений MAX + my_chat_member/chat_member')
 
 # 14. Как в telebot: middleware для message_created (телеботовское 'message')
 #     получает каждое сообщение, которое дойдёт до обработчиков, — bot_started

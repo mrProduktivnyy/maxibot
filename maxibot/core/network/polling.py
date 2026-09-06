@@ -39,7 +39,6 @@ class Polling:
         self.on_error = on_error
         self.is_running = False
         self.marker = None
-        self.is_prev_add = False
 
     def stop(self):
         """
@@ -76,14 +75,10 @@ class Polling:
                 updates = updates_data.get("updates", [])
                 for update in updates:
                     try:
-                        if update.get("update_type") == "bot_added" and self.is_prev_add:
-                            continue
-                        else:
-                            if update.get("update_type") == "bot_added":
-                                self.is_prev_add = True
-                            else:
-                                self.is_prev_add = False
-                            handler(update)
+                        # дубли bot_added от MAX отсеивает сам бот
+                        # (MaxiBot._process_update) — это общее место
+                        # для поллинга и webhook
+                        handler(update)
                     except Exception as e:
                         self._report(e, "Error while processing update")
 
