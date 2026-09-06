@@ -1,4 +1,5 @@
 # from dataclasses import dataclass
+import json
 import logging
 import traceback
 from datetime import datetime
@@ -1926,14 +1927,65 @@ class Update(JsonDeserializable):
     :param update: Обновление от MAX API
     :type update: Dict[str, Any]
 
-    :param api: Объект API
-    :type api: Api
+    :param api: Объект API. None — отложенный разбор: объекты (message,
+        edited_message, callback_query) не строятся, потому что Chat
+        ходит за названием чата в API. Так создаёт Update.de_json без
+        api; объекты появятся, когда обновление попадёт
+        в MaxiBot.process_new_updates
+    :type api: Optional[Api]
     """
 
-    def __init__(self, update: Dict[str, Any], api: Api):
+    @classmethod
+    def de_json(cls, json_string, api: Optional[Api] = None) -> Optional["Update"]:
+        """
+        Update из JSON-строки, bytes или готового словаря — как
+        telebot.types.Update.de_json. Для кастомных webhook-интеграций:
+
+            @app.post('/webhook')
+            def webhook():
+                update = maxibot.types.Update.de_json(request.get_json())
+                bot.process_new_updates([update])
+                return '', 200
+
+        Без api обновление остаётся сырым (см. параметр api
+        конструктора): update.message равен None, пока бот не разберёт
+        обновление в process_new_updates — и разберёт только если есть
+        кому его отдать (обработчик этого типа или middleware); иначе
+        Update так и останется сырым. Нужен заполненный update.message
+        в любом случае — передайте api:
+        Update.de_json(request.get_json(), bot.api).
+        process_new_updates принимает и словари напрямую, так что сам
+        вызов de_json нужен только ради переносимости кода
+
+        :param json_string: JSON-строка, bytes или словарь обновления
+        :param api: Объект API (опционально)
+        """
+        if json_string is None:
+            return None
+        if isinstance(json_string, (bytes, bytearray)):
+            json_string = json_string.decode("utf-8")
+        if isinstance(json_string, str):
+            json_string = json.loads(json_string)
+        if not isinstance(json_string, dict):
+            raise TypeError(
+                "Update.de_json ожидает словарь обновления или JSON-строку, "
+                f"получено {type(json_string).__name__}"
+            )
+        return cls(json_string, api)
+
+    def __init__(self, update: Dict[str, Any], api: Optional[Api] = None):
         self.json: Dict[str, Any] = update
+        # клиент API, которым построены объекты обновления; None —
+        # обновление сырое (Update.de_json без api), и
+        # MaxiBot.process_new_updates разберёт его заново
+        self.api = api
         self.update_type: Optional[str] = update.get("update_type")
         self.timestamp: Optional[int] = update.get("timestamp")
+        # в MAX у обновления нет собственного id: маркер один на пачку
+        # (см. MaxiBot.get_updates и bot.last_update_id). Атрибут
+        # всегда None, чтобы мигрантский `if update.update_id:`
+        # не падал с AttributeError (философия _TELEBOT_ATTRIBUTES)
+        self.update_id = None
         self.message: Optional[Message] = None
         self.edited_message: Optional[Message] = None
         self.callback_query: Optional[CallbackQuery] = None
@@ -1948,6 +2000,25 @@ class Update(JsonDeserializable):
         # бота, которого у Update нет; без подписки остаются None
         self.my_chat_member = None
         self.chat_member = None
+        if api is None:
+            # отложенный разбор (Update.de_json без api): без клиента
+            # объекты не построить — Chat ходит за названием чата
+            return
+        self.parse(api)
+
+    def parse(self, api: Api) -> "Update":
+        """
+        Строит объекты обновления (message, edited_message,
+        callback_query) — то же, что делает конструктор с api. Нужен
+        для сырых обновлений из Update.de_json без api: бот вызывает
+        его в process_new_updates, и объекты появляются в том же
+        Update, который передал вызывающий
+
+        :param api: Объект API
+        :return: сам Update (для цепочек)
+        """
+        self.api = api
+        update = self.json
         try:
             if self.update_type in (UpdateType.BOT_STARTED, UpdateType.BOT_ADDED) or \
                     self.update_type == UpdateType.MESSAGE_CREATED and "message" in update:
@@ -1965,3 +2036,4 @@ class Update(JsonDeserializable):
             logger.error(
                 "Error while parsing update %s:\n%s", self.update_type, traceback.format_exc()
             )
+        return self

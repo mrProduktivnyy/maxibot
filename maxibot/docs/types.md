@@ -164,6 +164,17 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **url** (`str`) - Публичное имя (username) бота (ведущий @ отбрасывается) или ссылка на него — поле web_app кнопки open_app; None допустим, если задан contact_id. Адрес самого приложения сюда не подходит — будет предупреждение в лог  
 * **contact_id** (`int`) - ID бота, чьё мини-приложение надо открыть — поле contact_id кнопки open_app (только в MAX)  
 * **payload** (`str`) - Параметр запуска, который попадёт в initData мини-приложения — поле payload кнопки open_app (только в MAX)  
+## class maxibot.types.Update(update: Dict[str, Any], api: Optional[Api])
+Обновление от MAX API целиком (аналог `telebot.types.Update`) — его получают middleware без update_types и возвращает `bot.get_updates()`. Заполнено только поле своего типа, сырой payload всегда в `json`  
+**Параметры:**
+* **json** (`dict`) - Сырое обновление от MAX  
+* **update_type** (`str`) / **timestamp** (`int`) - Тип и время события  
+* **message** / **edited_message** / **callback_query** - Объекты своего типа; в них те же экземпляры, что уйдут в обработчики, поэтому атрибуты, выставленные в middleware, видны и обработчикам  
+* **my_chat_member** / **chat_member** (`ChatMemberUpdated`) - События членства; подставляет бот при обработке, без подписки — None  
+* **channel_post** / **edited_channel_post** / **update_id** - Телеботовские поля, которых в MAX нет: всегда None, чтобы перенесённый код не падал с AttributeError. Маркер пачки вместо update_id — в `bot.last_update_id`  
+* **api** - Клиент API, которым построены объекты; None — обновление сырое (см. de_json)  
+
+**Update.de_json(json_string, api=None)** — как в telebot: принимает JSON-строку, bytes или готовый словарь. Без api обновление остаётся сырым (`update.message` равен None), потому что Chat ходит в API за названием чата: объекты появятся в этом же Update, когда бот разберёт его в `process_new_updates` — и только если этот тип обновления бот вообще диспатчит (есть обработчик или middleware). Нужен заполненный `update.message` в любом случае — передайте api: `Update.de_json(request.get_json(), bot.api)`  
 ## class maxibot.types.UpdateType
 Типы обновлений, которые можно получать от MAX API (объект Update в документации; тот же список строк — `maxibot.util.update_types`)  
 **Параметры:**

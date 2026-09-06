@@ -299,6 +299,21 @@ class MaxiBot:
             t: [] for t in tuple(util.update_types) + _SYNTHETIC_MIDDLEWARE_TYPES
         }
         self.default_middleware_handlers: List[Callable] = []
+        # слушатели новых сообщений (set_update_listener): вызываются
+        # со СПИСКОМ Message, как в telebot
+        self.update_listener: List[Callable] = []
+        # маркер MAX из последнего ответа get_updates: в telebot здесь
+        # id последнего обновления, в MAX — непрозрачный маркер
+        # следующего (см. get_updates). Поллинг ведёт свой маркер
+        self.last_update_id = 0
+        # тот же маркер, но с отличием «маркера ещё не получали» (None)
+        # от нулевого маркера: 0 в MAX — валидное значение, а публичный
+        # last_update_id начинается с телеботовского 0
+        self._updates_marker = None
+        # ключи предупреждений, которые уже показывали: get_updates и
+        # нормализация типов вызываются в цикле, и повтор одного и того
+        # же текста утопил бы настоящие ошибки в логе
+        self._warned_once = set()
         self.poll = None
         self._webhook: WebhookServer = None
         self.is_running = False
@@ -342,6 +357,9 @@ class MaxiBot:
         Крутит GET /updates с timeout=0 (запрос возвращается сразу, без
         long polling), подтверждая полученное маркером, пока очередь не
         опустеет — поллинг после этого начнёт с чистого листа.
+
+        :return: Маркер, на котором остановились (None — пропускать было
+            нечего); get_updates(offset=-1) запоминает его как свой
         """
         marker = None
         while True:
@@ -353,6 +371,187 @@ class MaxiBot:
             if not data.get("updates") or new_marker is None or new_marker == marker:
                 break
             marker = new_marker
+        return marker
+
+    def get_updates(
+        self,
+        offset: Optional[int] = None,
+        limit: Optional[int] = None,
+        timeout: Optional[int] = 20,
+        allowed_updates: Optional[List[str]] = None,
+        long_polling_timeout: int = 20,
+    ) -> List[Update]:
+        """
+        Получает накопленные обновления одним запросом (GET /updates) —
+        как telebot.get_updates. Для своего цикла обработки:
+
+            while True:
+                updates = bot.get_updates()      # маркер бот ведёт сам
+                bot.process_new_updates(updates)
+
+        Не смешивайте с polling()/infinity_polling(): там свой маркер,
+        и обновления будут разбираться между двумя циклами.
+
+        Объекты (Message, CallbackQuery) строятся для всех полученных
+        обновлений — как в telebot; поллинг, в отличие от этого, строит
+        их только при наличии обработчиков, потому что Chat ходит в API
+        за названием чата.
+
+        :param offset: Маркер, с которого продолжать. В telebot это
+            update_id + 1, в MAX — непрозрачный маркер из предыдущего
+            ответа (указывает на следующее обновление), поэтому
+            арифметика не нужна: телеботовское `offset=last_update_id + 1`
+            распознаётся и исправляется с предупреждением, иначе одно
+            обновление потерялось бы. У Update нет update_id (маркер
+            один на пачку, он же в bot.last_update_id). None и 0 —
+            продолжить с маркера последнего вызова (после первого
+            вызова цикл работает сам), отрицательный — телеботовский
+            пропуск накопленного (см. skip_pending)
+        :type offset: Optional[int]
+
+        :param limit: Сколько обновлений вернуть за раз (1–1000,
+            по умолчанию 100 на стороне MAX); значения вне диапазона
+            обрезаются с предупреждением, 0 не отправляется вовсе —
+            как в telebot, где работает серверный дефолт
+        :type limit: Optional[int]
+
+        :param timeout: В telebot — таймаут соединения; здесь
+            используется как длительность long polling, только если
+            long_polling_timeout не задан (None). Соединением
+            управляют apihelper.CONNECT_TIMEOUT / READ_TIMEOUT
+        :type timeout: Optional[int]
+
+        :param allowed_updates: Типы обновлений; телеботовские имена
+            переводятся в имена MAX (см. polling). Если ни одного типа
+            MAX не осталось, фильтра не будет — MAX вернёт все
+            обновления (с предупреждением)
+        :type allowed_updates: Optional[List[str]]
+
+        :param long_polling_timeout: Сколько секунд MAX держит запрос,
+            ожидая обновления (0–90) — как в telebot, где длительность
+            long polling задаёт именно этот параметр. Отличие: 0 в MAX
+            означает «ответить сразу», а не «взять таймаут по
+            умолчанию», как в telebot, поэтому цикл без своей паузы
+            будет опрашивать API непрерывно (предупреждение в лог)
+        :type long_polling_timeout: int
+
+        :return: Список обновлений (Update)
+        :rtype: List[Update]
+        """
+        params: Dict[str, Any] = {}
+        marker = offset
+        if isinstance(marker, (int, float)) and not isinstance(marker, bool) and marker < 0:
+            # телеботовская идиома пропуска накопленного (__skip_updates
+            # шлёт -1, дока telebot разрешает любое -N): отрицательного
+            # маркера в MAX нет, пропускаем сами
+            self._warn_once(
+                "offset_negative",
+                "get_updates: offset=%s — телеботовский пропуск накопленного; "
+                "в MAX отрицательного маркера нет, обновления пропущены "
+                "отдельным проходом", marker
+            )
+            skipped = self._skip_updates()
+            if skipped is not None:
+                self._updates_marker = skipped
+                self.last_update_id = skipped
+            return []
+        if marker is None or marker == 0:
+            # 0 — телеботовское «offset не задан» (telebot проверяет
+            # истинность); свой маркер может быть и нулевым, поэтому
+            # «маркера ещё нет» — это отдельный None в _updates_marker
+            marker = self._updates_marker
+        elif (isinstance(marker, int) and not isinstance(marker, bool)
+                and marker == (self._updates_marker or 0) + 1):
+            self._warn_once(
+                "offset_plus_one",
+                "get_updates: offset — маркер MAX, а не update_id + 1; "
+                "прибавленная единица пропустила бы одно обновление, "
+                "беру свой маркер (%s)", self._updates_marker
+            )
+            marker = self._updates_marker
+        if marker is not None:
+            params["marker"] = marker
+        if limit:
+            # ложный limit (0) не отправляем — как в telebot, где
+            # работает серверный дефолт (в MAX это 100)
+            limit = self._clamp_update_param("limit", limit, 1, 1000)
+            if limit is not None:
+                params["limit"] = limit
+        # длительность long polling — как в telebot: её задаёт
+        # long_polling_timeout, а timeout там про соединение
+        if long_polling_timeout is not None:
+            hold, hold_name = long_polling_timeout, "long_polling_timeout"
+        else:
+            hold, hold_name = timeout, "timeout"
+        hold = self._clamp_update_param(hold_name, hold, 0, 90)
+        if hold is not None:
+            if hold == 0:
+                # в telebot 0 означал «взять дефолт», в MAX — «вернуть
+                # сразу»: цикл без пауз будет долбить API
+                self._warn_once(
+                    "hold_zero",
+                    "get_updates: %s=0 отключает long polling — MAX ответит "
+                    "сразу; в telebot 0 означал таймаут по умолчанию, так что "
+                    "цикл без своей паузы будет запрашивать обновления "
+                    "непрерывно", hold_name
+                )
+            params["timeout"] = hold
+        data = self.api.get_updates(
+            self._normalize_allowed_updates(allowed_updates) or [], params
+        ) or {}
+        if "marker" in data:
+            # как в поллинге (core/network/polling.py): маркер берётся
+            # из ответа целиком, включая null — MAX так говорит
+            # «продолжай без маркера»
+            self._updates_marker = data["marker"]
+            self.last_update_id = data["marker"] or 0
+        return [Update(update, self.api) for update in (data.get("updates") or [])]
+
+    def _warn_once(self, key, message, *args):
+        """
+        Предупреждение, которое печатается один раз за жизнь бота:
+        get_updates и нормализация типов обновлений вызываются в цикле,
+        и повтор одного текста каждые несколько секунд утопил бы
+        настоящие ошибки
+
+        :param key: Ключ предупреждения (имя + значения аргументов)
+        """
+        full_key = (key,) + tuple(repr(arg) for arg in args)
+        if full_key in self._warned_once:
+            return
+        self._warned_once.add(full_key)
+        logger.warning(message, *args)
+
+    def _clamp_update_param(self, name, value, low, high):
+        """
+        Приводит limit/timeout запроса обновлений к целому в допустимом
+        диапазоне MAX. Значение, которое числом не становится,
+        отбрасывается с предупреждением: строка в timeout иначе
+        доехала бы до клиента и раздула таймаут чтения
+
+        :return: Целое в диапазоне или None (параметр не отправлять)
+        """
+        if value is None:
+            return None
+        try:
+            # round, а не int: дробный таймаут иначе усекался бы к нулю,
+            # то есть молча отключал long polling. OverflowError — это
+            # float('inf'), он не должен ронять запрос обновлений
+            number = round(float(value))
+        except (TypeError, ValueError, OverflowError):
+            self._warn_once(
+                "param_not_a_number",
+                "get_updates: %s=%r — не число, параметр не отправлен", name, value
+            )
+            return None
+        if not low <= number <= high:
+            self._warn_once(
+                "param_out_of_range",
+                "get_updates: %s=%s вне диапазона MAX (%s–%s), обрезан",
+                name, value, low, high
+            )
+            number = min(max(number, low), high)
+        return number
 
     def infinity_polling(
         self,
@@ -465,8 +664,7 @@ class MaxiBot:
         )
         await self.poll.loop(self._process_update)
 
-    @staticmethod
-    def _normalize_allowed_updates(allowed_updates):
+    def _normalize_allowed_updates(self, allowed_updates):
         """
         Переводит телеботовские имена типов обновлений в имена MAX —
         список уходит в GET /updates как есть, и телеботовский
@@ -500,17 +698,31 @@ class MaxiBot:
                 unsupported.append(update_type)
             else:
                 unknown.append(update_type)
+        # предупреждения один раз на набор: get_updates нормализует
+        # список на каждой итерации пользовательского цикла
         if unsupported:
-            logger.warning(
+            self._warn_once(
+                "allowed_unsupported",
                 "allowed_updates: обновлений %s в MAX нет — они убраны "
                 "из подписки", ", ".join(unsupported)
             )
         if unknown:
-            logger.warning(
+            self._warn_once(
+                "allowed_unknown",
                 "allowed_updates: неизвестные типы %s убраны из подписки; "
                 "доступны: %s", ", ".join(unknown), ", ".join(util.update_types)
             )
-        return list(dict.fromkeys(expanded))
+        normalized = list(dict.fromkeys(expanded))
+        if not normalized:
+            # пустой список MAX считает отсутствием фильтра: подписка
+            # не сузилась, а наоборот стала полной — про это надо
+            # сказать громко, иначе бот молча получит весь поток
+            self._warn_once(
+                "allowed_empty",
+                "allowed_updates: ни одного типа MAX не осталось — фильтра "
+                "не будет, MAX пришлёт ВСЕ обновления"
+            )
+        return normalized
 
     @staticmethod
     def _prepare_message_filters(content_types, commands, default_text=True):
@@ -837,6 +1049,141 @@ class MaxiBot:
             func=func
         )
         self.add_edited_channel_post_handler(handler_dict)
+
+    def process_new_updates(self, updates: List[Union[Update, Dict[str, Any]]]):
+        """
+        Прогоняет список обновлений через весь пайплайн бота (middleware,
+        затем обработчики) — как telebot.process_new_updates. Публичная
+        точка входа для своего цикла get_updates и для кастомных
+        webhook-интеграций (Flask, FastAPI, aiohttp и любой другой
+        сервер вместо start_webhook):
+
+            @app.post('/webhook')
+            def webhook():
+                bot.process_new_updates([request.get_json()])
+                return '', 200
+
+        Принимает и словари обновлений MAX, и объекты Update (в том
+        числе сырые — из Update.de_json без api: такое обновление бот
+        разберёт сам). Ошибка на одном обновлении не отменяет остальные
+
+        :param updates: Список обновлений (Update или словари)
+        :type updates: List[Union[Update, Dict[str, Any]]]
+        """
+        if not updates:
+            return
+        if isinstance(updates, (dict, Update)):
+            # тело вебхука MAX — одно обновление, и забытые скобки
+            # (process_new_updates(request.get_json())) иначе увели бы
+            # цикл по ключам словаря, потеряв обновление
+            logger.warning(
+                "process_new_updates: ожидается список обновлений, получено "
+                "одно — обрабатываю его; оберните в список: [update]"
+            )
+            updates = [updates]
+        logger.debug("Received %s new updates", len(updates))
+        for update in updates:
+            parsed = None
+            if isinstance(update, Update):
+                raw = update.json
+                # готовые объекты не разбираем второй раз (Chat ходит
+                # в API за названием чата), а сырому Update.de_json бот
+                # достроит их в _process_update — в том же объекте,
+                # который передал вызывающий
+                parsed = update
+            elif isinstance(update, dict):
+                raw = update
+            else:
+                logger.warning(
+                    "process_new_updates: ожидается словарь обновления MAX "
+                    "или types.Update, получено %s — пропущено; JSON-строку "
+                    "разберите через types.Update.de_json(...)",
+                    type(update).__name__
+                )
+                continue
+            if not isinstance(raw, dict):
+                logger.warning(
+                    "process_new_updates: у Update нет словаря обновления "
+                    "(json=%r) — пропущено", raw
+                )
+                continue
+            self._process_update(raw, parsed=parsed)
+
+    def set_update_listener(self, listener: Callable):
+        """
+        Добавляет слушателя новых сообщений — как
+        telebot.set_update_listener. Слушателей может быть несколько,
+        каждый вызывается со списком Message: раньше обработчиков
+        message_handler и только с теми сообщениями, которых не забрал
+        register_next_step_handler.
+
+        Отличие от telebot: список всегда из одного сообщения — maxibot
+        обрабатывает обновления по одному (в telebot слушателю приходит
+        вся пачка get_updates разом), так что пачечный слушатель
+        (счётчик, батч-запись) сработает столько раз, сколько пришло
+        сообщений. И при threaded=True (по умолчанию) слушатель лишь
+        ставится в очередь раньше обработчика — фактический порядок
+        выполнения не гарантирован.
+
+        Посты каналов сюда не попадают (у них свои обработчики), как
+        и правки, коллбэки и события членства — в telebot слушатели
+        тоже только про новые сообщения
+
+        :param listener: Функция, принимающая список Message
+        :type listener: Callable
+        """
+        self.update_listener.append(listener)
+
+    def _notify_update(self, new_messages: List[Message]):
+        """
+        Отдаёт список новых сообщений слушателям set_update_listener
+        (как приватный __notify_update в telebot)
+        """
+        for listener in self.update_listener:
+            self._exec_task(listener, new_messages)
+
+    def process_new_messages(self, new_messages: List[Message]):
+        """
+        Прогоняет новые сообщения по пайплайну — как
+        telebot.process_new_messages: сначала ожидающие
+        register_next_step_handler, затем слушатели
+        set_update_listener, затем обработчики message_handler.
+
+        Сообщение, которое забрал next_step-обработчик, дальше не идёт.
+        В отличие от telebot переданный список не изменяется (telebot
+        выбрасывает из него сообщения, ушедшие в next_step)
+
+        :param new_messages: Список новых сообщений
+        :type new_messages: List[Message]
+        """
+        remaining = []
+        for message in new_messages:
+            # ключ — chat.id (см. register_next_step_handler); атомарный
+            # pop, потому что clear_step_handler может выполняться
+            # в воркере параллельно
+            chat_id = getattr(getattr(message, "chat", None), "id", None)
+            handler = self._next_steps.pop(chat_id, None) if chat_id is not None else None
+            if handler is not None:
+                self._exec_task(handler.callback, message, *handler.args, **handler.kwargs)
+                continue
+            remaining.append(message)
+        if not remaining:
+            return
+        self._notify_update(remaining)
+        for message in remaining:
+            self._process_text_message(message)
+
+    def process_new_edited_messages(self, new_edited_message: List[Message]):
+        """
+        Прогоняет правки сообщений по обработчикам edited_message —
+        как telebot.process_new_edited_messages
+
+        :param new_edited_message: Список отредактированных сообщений
+        :type new_edited_message: List[Message]
+        """
+        for message in new_edited_message:
+            self.run_handler(context=message,
+                             message_handlers=self.edited_message_handlers)
 
     def process_new_channel_posts(self, new_channel_post: List[Message]):
         """
@@ -1439,13 +1786,19 @@ class MaxiBot:
             )
             return None
 
-    def _process_update(self, update: Dict[str, Any]):
+    def _process_update(self, update: Dict[str, Any], parsed: Optional[Update] = None):
         """
         Метод для обработки входящего полученного обновления: сначала
         middleware, затем обработчики
 
         :param update: Данные по обновлениям
         :type update: Dict[str, Any]
+
+        :param parsed: Готовый Update этого же обновления (его передаёт
+            process_new_updates) — чтобы не строить объекты второй раз:
+            Chat ходит в API за названием чата. Сырой Update
+            (из de_json без api) достраивается здесь же
+        :type parsed: Optional[Update]
         """
         try:
             update_type = update.get("update_type")
@@ -1484,7 +1837,11 @@ class MaxiBot:
                 # остальные типы обновлений бот не обрабатывает — объекты не
                 # строим: Message ради названия чата ходит в API
                 return
-            upd = Update(update, self.api)
+            upd = parsed if parsed is not None else Update(update, self.api)
+            if upd.api is None:
+                # сырое обновление из Update.de_json без api: объекты
+                # строим здесь, после гейтов — не раньше, чем понадобятся
+                upd.parse(self.api)
             # события членства -> телеботовский ChatMemberUpdated. Строим
             # только для тех, кто объект увидит: обработчики членства,
             # middleware my_chat_member/chat_member и общие middleware
@@ -1526,26 +1883,16 @@ class MaxiBot:
                     # у поста от имени канала from_user равен None)
                     self.process_new_channel_posts([upd.message])
                     return
-                # атомарный pop вместо `in` + pop: clear_step_handler может
-                # выполняться в воркере параллельно и убрать ключ между
-                # проверкой и извлечением — сообщение тогда потерялось бы;
-                # ключ — chat.id (см. register_next_step_handler), он же
-                # безопасен при from_user=None (sender null вне канала)
-                handler = self._next_steps.pop(upd.message.chat.id, None)
-                if handler is not None:
-                    self._exec_task(handler.callback, upd.message, *handler.args, **handler.kwargs)
-                else:
-                    self._process_text_message(upd.message)
+                # дальше — публичная точка пайплайна: next_step,
+                # слушатели set_update_listener, message_handlers
+                self.process_new_messages([upd.message])
             elif upd.edited_message is not None:
                 if getattr(upd.edited_message.chat, "type", None) == "channel":
                     self.process_new_edited_channel_posts([upd.edited_message])
                     return
-                self.run_handler(
-                    context=upd.edited_message,
-                    message_handlers=self.edited_message_handlers,
-                )
+                self.process_new_edited_messages([upd.edited_message])
             elif upd.callback_query is not None:
-                self._process_callback_query(upd.callback_query)
+                self.process_new_callback_query([upd.callback_query])
         except Exception as e:
             self._report_exception(e, "Error while processing update")
 
@@ -5111,6 +5458,17 @@ class MaxiBot:
         :return: None
         """
         self.callback_query_handlers.append(handler_dict)
+
+    def process_new_callback_query(self, new_callback_queries: List[CallbackQuery]):
+        """
+        Прогоняет коллбэки по обработчикам callback_query — как
+        telebot.process_new_callback_query (публичная точка пайплайна)
+
+        :param new_callback_queries: Список коллбэков
+        :type new_callback_queries: List[CallbackQuery]
+        """
+        for callback in new_callback_queries:
+            self._process_callback_query(callback)
 
     def _process_callback_query(self, callback: CallbackQuery):
         """

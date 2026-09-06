@@ -382,16 +382,17 @@ print("14 ok: общая функция на message+my_chat_member получа
 
 # 15. allowed_updates: телеботовские имена разворачиваются в типы MAX,
 #     невозможные убираются с предупреждением
-normalized = MaxiBot._normalize_allowed_updates(
+bot = make_bot()
+normalized = bot._normalize_allowed_updates(
     ["message", "my_chat_member", "chat_member", "message_created"])
 assert normalized == ["message_created", "bot_added", "bot_removed",
                       "bot_started", "bot_stopped", "user_added",
                       "user_removed"], normalized
 result, warns = capture_warnings(
-    lambda: MaxiBot._normalize_allowed_updates(["poll", "выдумка", "message_created"]))
+    lambda: bot._normalize_allowed_updates(["poll", "выдумка", "message_created"]))
 assert result == ["message_created"], result
 assert any("в MAX нет" in w for w in warns) and any("неизвестные" in w for w in warns), warns
-assert MaxiBot._normalize_allowed_updates(None) is None
+assert bot._normalize_allowed_updates(None) is None
 print("15 ok: allowed_updates нормализуется под имена MAX")
 
 # 16. Два бота в одном процессе не делят кэш данных бота
