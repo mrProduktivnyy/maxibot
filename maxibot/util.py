@@ -187,7 +187,10 @@ def get_edit_message_data(
         "message": {
             "recipient": {
                 "chat_id": int(chat_id) if isinstance(chat_id, str) and chat_id.isdigit() else chat_id,
-                "chat_type": "dialog",
+                # тип чата в ответе на правку не приходит, а выдумывать
+                # его нельзя: 'dialog' у сообщения из группы означал бы
+                # chat.type == 'private' и увёл бы проверку не в ту ветку
+                "chat_type": None,
                 "user_id": None
             },
             "timestamp": timestamp,
@@ -200,6 +203,9 @@ def get_edit_message_data(
             "sender": {}
         },
         "timestamp": timestamp,
-        "user_locale": "ru",
+        # локаль в ответе на правку не приходит — выдуманное "ru"
+        # означало бы from_user.language_code == "ru" у любого
+        # пользователя (и ложное срабатывание LanguageFilter)
+        "user_locale": None,
         "update_type": "message_edited"
     }

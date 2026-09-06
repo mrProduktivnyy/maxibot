@@ -18,6 +18,7 @@ from maxibot.types import BotCommand, BotName, BotDescription, BotShortDescripti
 from maxibot.types import File, Video
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
+from maxibot.custom_filters import SimpleCustomFilter, AdvancedCustomFilter
 from maxibot.exceptions import (
     MaxApiException,
     MaxApiHTTPException,
@@ -285,6 +286,12 @@ class MaxiBot:
         self.callback_query_handlers = []
         self.my_chat_member_handlers = []
         self.chat_member_handlers = []
+        # кастом-фильтры по ключу (add_custom_filter), как в telebot:
+        # незарегистрированный ключ в обработчике не сработает
+        self.custom_filters: Dict[str, Any] = {}
+        # ключи фильтров проверяются один раз — на старте или на первом
+        # обновлении (у своего цикла и своего вебхука старта нет)
+        self._filter_keys_checked = False
         # user-объект самого бота для old/new_chat_member событий
         # my_chat_member; GET /me один раз при первом событии
         self._bot_member_payload = None
@@ -338,11 +345,55 @@ class MaxiBot:
             аргументом bot (как в telebot register_*_handler)
         :param filters: Description
         """
+        if filters.get('chat_types') is not None:
+            # единственная точка, через которую проходят ВСЕ регистрации
+            # (декораторы, register_*, кастом-фильтры из **kwargs)
+            filters['chat_types'] = MaxiBot._prepare_chat_types(filters['chat_types'])
         return {
             'function': handler,
             'pass_bot': pass_bot,
             'filters': {ftype: fvalue for ftype, fvalue in filters.items() if fvalue is not None}
         }
+
+    @staticmethod
+    def _prepare_chat_types(chat_types):
+        """
+        Приводит chat_types к телеботовским именам, с которыми
+        сверяется chat.type: 'dialog' -> 'private', 'chat' -> 'group',
+        'supergroup' -> 'group' (отдельного супергруппового чата
+        в MAX нет), 'channel' -> 'channel'. Принимаются и сырые имена
+        MAX — перенесённый с maxibot код продолжает работать.
+
+        Незнакомое имя остаётся как есть (обработчик с ним не
+        сработает) и попадает в предупреждение.
+
+        :param chat_types: Список типов чатов из обработчика
+        :return: Список телеботовских имён без повторов
+        """
+        if isinstance(chat_types, str):
+            logger.warning("chat_types должен быть списком, обернул строку")
+            chat_types = [chat_types]
+        normalized, unknown = [], []
+        for chat_type in chat_types:
+            if chat_type in Chat._CHAT_TYPE_MAP:
+                # сырое имя MAX -> телеботовское
+                normalized.append(Chat._CHAT_TYPE_MAP[chat_type])
+            elif chat_type == "supergroup":
+                normalized.append("group")
+            elif chat_type in Chat._TELEBOT_CHAT_TYPES:
+                normalized.append(chat_type)
+            else:
+                unknown.append(chat_type)
+                normalized.append(chat_type)
+        if unknown:
+            logger.warning(
+                "chat_types: неизвестные типы %s — обработчик с ними не "
+                "сработает; допустимы %s (и сырые типы MAX: %s)",
+                ", ".join(repr(name) for name in unknown),
+                ", ".join(sorted(Chat._TELEBOT_CHAT_TYPES)),
+                ", ".join(sorted(Chat._CHAT_TYPE_MAP)),
+            )
+        return list(dict.fromkeys(normalized))
 
     def polling(self, allowed_updates: Optional[List[str]] = None):
         """
@@ -656,6 +707,7 @@ class MaxiBot:
             # раз, чтобы перезапуск поллинга не терял свежие сообщения
             self._skip_updates()
             self.skip_pending = False
+        self._warn_unknown_filter_keys()
         self.is_running = True
         self.poll = Polling(
             api=self.api,
@@ -774,13 +826,20 @@ class MaxiBot:
         regexp: Optional[str] = None,
         func: Optional[Callable] = None,
         content_types: Optional[List[str]] = None,
-        chat_types: Optional[List[str]] = None
+        chat_types: Optional[List[str]] = None,
+        **kwargs
     ):
         """
         Декоратор для регистрации обработчика текстовых сообщений по шаблону
 
         :param pattern: Шаблон текста (точное совпадение или регулярное выражение)
         :type pattern: str
+
+        :param chat_types: Типы чатов — телеботовские имена
+            ('private'/'group'/'supergroup'/'channel'); сырые имена MAX
+            ('dialog'/'chat') тоже принимаются
+        :param kwargs: Кастом-фильтры, зарегистрированные через
+            add_custom_filter (как в telebot)
         """
         content_types, commands = self._prepare_message_filters(content_types, commands)
 
@@ -793,7 +852,8 @@ class MaxiBot:
                 content_types=content_types,
                 commands=commands,
                 regexp=regexp,
-                func=func
+                func=func,
+                **kwargs
             )
             self.message_handlers.append(handler_dict)
             return funcs
@@ -805,7 +865,8 @@ class MaxiBot:
         regexp: Optional[str] = None,
         func: Optional[Callable] = None,
         content_types: Optional[List[str]] = None,
-        chat_types: Optional[List[str]] = None
+        chat_types: Optional[List[str]] = None,
+        **kwargs
     ):
         """
         Декоратор для регистрации обработчика ПРАВОК сообщений
@@ -821,9 +882,10 @@ class MaxiBot:
         :param regexp: Регулярное выражение по тексту
         :param func: Функция-фильтр
         :param content_types: Типы контента (по умолчанию ['text'])
-        :param chat_types: Типы чатов — сырые имена MAX
-            ('dialog'/'chat'/'channel'), как и у message_handler;
-            телеботовские 'private'/'group' не совпадут
+        :param chat_types: Типы чатов — телеботовские имена
+            ('private'/'group'/'supergroup'/'channel'), как
+            и у message_handler; сырые имена MAX тоже принимаются
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         content_types, commands = self._prepare_message_filters(content_types, commands)
 
@@ -834,7 +896,8 @@ class MaxiBot:
                 content_types=content_types,
                 commands=commands,
                 regexp=regexp,
-                func=func
+                func=func,
+                **kwargs
             )
             self.add_edited_message_handler(handler_dict)
             return funcs
@@ -858,7 +921,8 @@ class MaxiBot:
         regexp: Optional[str] = None,
         func: Optional[Callable] = None,
         chat_types: Optional[List[str]] = None,
-        pass_bot: Optional[bool] = False
+        pass_bot: Optional[bool] = False,
+        **kwargs
     ):
         """
         Недекораторная регистрация обработчика правок сообщений — как
@@ -877,10 +941,11 @@ class MaxiBot:
         :param commands: Список команд
         :param regexp: Регулярное выражение по тексту
         :param func: Функция-фильтр
-        :param chat_types: Типы чатов — сырые имена MAX
-            ('dialog'/'chat'/'channel'); телеботовские
-            'private'/'group' не совпадут
+        :param chat_types: Типы чатов — телеботовские имена
+            ('private'/'group'/'supergroup'/'channel'); сырые имена
+            MAX тоже принимаются
         :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         content_types, commands = self._prepare_message_filters(
             content_types, commands, default_text=False)
@@ -891,7 +956,8 @@ class MaxiBot:
             content_types=content_types,
             commands=commands,
             regexp=regexp,
-            func=func
+            func=func,
+            **kwargs
         )
         self.add_edited_message_handler(handler_dict)
 
@@ -900,7 +966,8 @@ class MaxiBot:
         commands: Optional[List[str]] = None,
         regexp: Optional[str] = None,
         func: Optional[Callable] = None,
-        content_types: Optional[List[str]] = None
+        content_types: Optional[List[str]] = None,
+        **kwargs
     ):
         """
         Декоратор обработчика постов каналов — как
@@ -916,6 +983,7 @@ class MaxiBot:
         :param regexp: Регулярное выражение по тексту
         :param func: Функция-фильтр
         :param content_types: Типы контента (по умолчанию ['text'])
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         content_types, commands = self._prepare_message_filters(content_types, commands)
 
@@ -925,7 +993,8 @@ class MaxiBot:
                 content_types=content_types,
                 commands=commands,
                 regexp=regexp,
-                func=func
+                func=func,
+                **kwargs
             )
             self.add_channel_post_handler(handler_dict)
             return funcs
@@ -947,7 +1016,8 @@ class MaxiBot:
         commands: Optional[List[str]] = None,
         regexp: Optional[str] = None,
         func: Optional[Callable] = None,
-        pass_bot: Optional[bool] = False
+        pass_bot: Optional[bool] = False,
+        **kwargs
     ):
         """
         Недекораторная регистрация обработчика постов каналов — как
@@ -962,6 +1032,7 @@ class MaxiBot:
         :param regexp: Регулярное выражение по тексту
         :param func: Функция-фильтр
         :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         content_types, commands = self._prepare_message_filters(
             content_types, commands, default_text=False)
@@ -971,7 +1042,8 @@ class MaxiBot:
             content_types=content_types,
             commands=commands,
             regexp=regexp,
-            func=func
+            func=func,
+            **kwargs
         )
         self.add_channel_post_handler(handler_dict)
 
@@ -980,7 +1052,8 @@ class MaxiBot:
         commands: Optional[List[str]] = None,
         regexp: Optional[str] = None,
         func: Optional[Callable] = None,
-        content_types: Optional[List[str]] = None
+        content_types: Optional[List[str]] = None,
+        **kwargs
     ):
         """
         Декоратор обработчика ПРАВОК постов каналов — как
@@ -992,6 +1065,7 @@ class MaxiBot:
         :param regexp: Регулярное выражение по тексту
         :param func: Функция-фильтр
         :param content_types: Типы контента (по умолчанию ['text'])
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         content_types, commands = self._prepare_message_filters(content_types, commands)
 
@@ -1001,7 +1075,8 @@ class MaxiBot:
                 content_types=content_types,
                 commands=commands,
                 regexp=regexp,
-                func=func
+                func=func,
+                **kwargs
             )
             self.add_edited_channel_post_handler(handler_dict)
             return funcs
@@ -1023,7 +1098,8 @@ class MaxiBot:
         commands: Optional[List[str]] = None,
         regexp: Optional[str] = None,
         func: Optional[Callable] = None,
-        pass_bot: Optional[bool] = False
+        pass_bot: Optional[bool] = False,
+        **kwargs
     ):
         """
         Недекораторная регистрация обработчика правок постов каналов —
@@ -1037,6 +1113,7 @@ class MaxiBot:
         :param regexp: Регулярное выражение по тексту
         :param func: Функция-фильтр
         :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         content_types, commands = self._prepare_message_filters(
             content_types, commands, default_text=False)
@@ -1046,7 +1123,8 @@ class MaxiBot:
             content_types=content_types,
             commands=commands,
             regexp=regexp,
-            func=func
+            func=func,
+            **kwargs
         )
         self.add_edited_channel_post_handler(handler_dict)
 
@@ -1208,7 +1286,7 @@ class MaxiBot:
             self.run_handler(context=message,
                              message_handlers=self.edited_channel_post_handlers)
 
-    def my_chat_member_handler(self, func=None):
+    def my_chat_member_handler(self, func=None, **kwargs):
         """
         Декоратор обработчика изменений статуса САМОГО БОТА — как
         telebot.my_chat_member_handler. Обработчик получает
@@ -1223,12 +1301,14 @@ class MaxiBot:
           аналог блокировки — главный сценарий my_chat_member
           в telebot).
 
-        Фильтр только func, как в telebot.
+        Фильтры — func и кастом-фильтры (add_custom_filter), как
+        в telebot.
 
         :param func: Функция-фильтр по ChatMemberUpdated
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         def decorator(funcs: HandlerFunc):
-            handler_dict = self._build_handler_dict(funcs, func=func)
+            handler_dict = self._build_handler_dict(funcs, func=func, **kwargs)
             self.add_my_chat_member_handler(handler_dict)
             return funcs
         return decorator
@@ -1246,7 +1326,8 @@ class MaxiBot:
         self,
         callback: Callable,
         func: Optional[Callable] = None,
-        pass_bot: Optional[bool] = False
+        pass_bot: Optional[bool] = False,
+        **kwargs
     ):
         """
         Недекораторная регистрация обработчика статуса бота — как
@@ -1256,12 +1337,13 @@ class MaxiBot:
         :param callback: Функция-обработчик (ChatMemberUpdated)
         :param func: Функция-фильтр
         :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         handler_dict = self._build_handler_dict(
-            callback, pass_bot=pass_bot, func=func)
+            callback, pass_bot=pass_bot, func=func, **kwargs)
         self.add_my_chat_member_handler(handler_dict)
 
-    def chat_member_handler(self, func=None):
+    def chat_member_handler(self, func=None, **kwargs):
         """
         Декоратор обработчика изменений статуса ДРУГИХ участников — как
         telebot.chat_member_handler. Синтезируется из user_added
@@ -1271,12 +1353,14 @@ class MaxiBot:
         и ограничения событий не порождают. from_user — кто добавил/
         удалил (по ссылке вошёл или сам вышел — сам пользователь).
         В telebot этот тип требует allowed_updates — в MAX события
-        приходят сами, ничего включать не нужно. Фильтр только func.
+        приходят сами, ничего включать не нужно. Фильтры — func
+        и кастом-фильтры (add_custom_filter).
 
         :param func: Функция-фильтр по ChatMemberUpdated
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         def decorator(funcs: HandlerFunc):
-            handler_dict = self._build_handler_dict(funcs, func=func)
+            handler_dict = self._build_handler_dict(funcs, func=func, **kwargs)
             self.add_chat_member_handler(handler_dict)
             return funcs
         return decorator
@@ -1294,7 +1378,8 @@ class MaxiBot:
         self,
         callback: Callable,
         func: Optional[Callable] = None,
-        pass_bot: Optional[bool] = False
+        pass_bot: Optional[bool] = False,
+        **kwargs
     ):
         """
         Недекораторная регистрация обработчика статуса участников — как
@@ -1304,9 +1389,10 @@ class MaxiBot:
         :param callback: Функция-обработчик (ChatMemberUpdated)
         :param func: Функция-фильтр
         :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
         """
         handler_dict = self._build_handler_dict(
-            callback, pass_bot=pass_bot, func=func)
+            callback, pass_bot=pass_bot, func=func, **kwargs)
         self.add_chat_member_handler(handler_dict)
 
     def process_new_my_chat_member(self, new_my_chat_members: List[ChatMemberUpdated]):
@@ -1479,6 +1565,149 @@ class MaxiBot:
         """
         self.add_middleware_handler(callback, update_types)
 
+    def add_custom_filter(self, custom_filter: Union[SimpleCustomFilter, AdvancedCustomFilter]):
+        """
+        Регистрирует кастом-фильтр — как telebot.add_custom_filter.
+        После регистрации ключ фильтра можно писать именованным
+        аргументом обработчика:
+
+            bot.add_custom_filter(IsDigitFilter())
+
+            @bot.message_handler(is_digit=True)
+
+        Готовые фильтры лежат в maxibot.custom_filters (как
+        в telebot.custom_filters); свой — наследник
+        SimpleCustomFilter (check(message) сравнивается со значением
+        из обработчика) или AdvancedCustomFilter (check(message,
+        значение)). Незарегистрированный ключ обработчик не пропустит,
+        и maxibot скажет об этом в лог — в telebot такой обработчик
+        молча не срабатывал.
+
+        :param custom_filter: Экземпляр фильтра с полем key
+        """
+        key = getattr(custom_filter, "key", None)
+        if isinstance(custom_filter, type):
+            # частая ошибка: передан класс вместо экземпляра —
+            # check() тогда вызывается без self
+            logger.warning(
+                "add_custom_filter: передан класс %s, а нужен экземпляр — "
+                "%s()", custom_filter.__name__, custom_filter.__name__)
+        elif not isinstance(custom_filter, (SimpleCustomFilter, AdvancedCustomFilter)):
+            # регистрируем всё равно (как telebot), но фильтр не будет
+            # вызван: _check_filter различает фильтры по базовому классу
+            logger.warning(
+                "add_custom_filter: %s не наследует SimpleCustomFilter или "
+                "AdvancedCustomFilter — фильтр не будет вызван",
+                type(custom_filter).__name__)
+        if not key:
+            logger.warning(
+                "add_custom_filter: у %s нет key — фильтр не зарегистрирован",
+                type(custom_filter).__name__)
+            return
+        if not isinstance(key, str):
+            # именованным аргументом обработчика такой ключ не написать
+            logger.warning(
+                "add_custom_filter: key фильтра %s должен быть строкой, "
+                "а не %s — фильтр не зарегистрирован",
+                type(custom_filter).__name__, type(key).__name__)
+            return
+        if key in self._BUILTIN_FILTER_KEYS:
+            logger.warning(
+                "add_custom_filter: ключ %r занят встроенным фильтром — "
+                "кастом-фильтр вызываться не будет", key)
+        existing = self.custom_filters.get(key)
+        if existing is not None and existing is not custom_filter:
+            logger.warning(
+                "add_custom_filter: ключ %r уже занят фильтром %s — "
+                "заменён на %s", key, type(existing).__name__,
+                type(custom_filter).__name__)
+        self.custom_filters[key] = custom_filter
+        # набор фильтров изменился — ключи обработчиков стоит
+        # проверить заново (фильтры часто регистрируют после хендлеров)
+        self._filter_keys_checked = False
+
+    def _check_filter(self, message_filter: str, filter_value, context):
+        """
+        Прогоняет объект через зарегистрированный кастом-фильтр —
+        как telebot._check_filter. Ошибка внутри фильтра не роняет
+        диспатч: она уходит в exception_handler, а обработчик
+        считается несовпавшим (как у func-фильтров)
+
+        :param message_filter: Ключ фильтра
+        :param filter_value: Значение фильтра из обработчика
+        :param context: Message, CallbackQuery или ChatMemberUpdated
+        """
+        filter_check = self.custom_filters.get(message_filter)
+        if not filter_check:
+            return False
+        try:
+            if isinstance(filter_check, SimpleCustomFilter):
+                # как в telebot: результат СРАВНИВАЕТСЯ со значением,
+                # поэтому is_digit=False матчит нечисловые сообщения
+                return filter_value == filter_check.check(context)
+            if isinstance(filter_check, AdvancedCustomFilter):
+                return filter_check.check(context, filter_value)
+        except Exception as e:
+            self._report_exception(e, "Error in custom filter %r" % message_filter)
+            return False
+        # как и в telebot, это ошибка — но она повторялась бы на каждое
+        # обновление, поэтому один раз и с именами
+        self._warn_once(
+            "filter_wrong_type",
+            "кастом-фильтр %r (%s) не наследует SimpleCustomFilter или "
+            "AdvancedCustomFilter — обработчики с ним не сработают",
+            message_filter, type(filter_check).__name__)
+        return False
+
+    # ключи фильтров, которые бот понимает сам (остальные должны быть
+    # зарегистрированы через add_custom_filter)
+    _BUILTIN_FILTER_KEYS = frozenset((
+        "content_types", "commands", "regexp", "chat_types", "func", "data"))
+
+    def _warn_unknown_filter_keys(self):
+        """
+        Проверяет, что все ключи фильтров зарегистрированных
+        обработчиков боту известны. Без этого про забытый
+        add_custom_filter можно узнать только случайно: до обработчика
+        с незнакомым ключом диспатч доходит, лишь если раньше по списку
+        никто не совпал (run_handler останавливается на первом
+        совпадении), и бот молча не отвечает — как в telebot.
+
+        Зовётся на старте (polling/start_webhook) и лениво на первом
+        обновлении — у своего цикла get_updates и своей
+        webhook-интеграции старта нет
+        """
+        self._filter_keys_checked = True
+        registries = (
+            self.message_handlers, self.edited_message_handlers,
+            self.channel_post_handlers, self.edited_channel_post_handlers,
+            self.callback_query_handlers, self.my_chat_member_handlers,
+            self.chat_member_handlers,
+        )
+        unknown = []
+        for handlers in registries:
+            for handler in handlers:
+                for key, value in (handler.get("filters") or {}).items():
+                    # None-значение диспатч пропускает (как в telebot),
+                    # значит и предупреждать о таком ключе не о чем
+                    if value is None:
+                        continue
+                    if (key not in self._BUILTIN_FILTER_KEYS
+                            and key not in self.custom_filters
+                            and key not in unknown):
+                        unknown.append(key)
+        if unknown:
+            # _warn_once, а не logger.warning: infinity_polling
+            # перезапускает поллинг каждые несколько секунд, и на
+            # обрыве сети одна и та же строка залила бы лог
+            self._warn_once(
+                "unknown_filter_keys",
+                "фильтры %s не зарегистрированы — обработчики с ними не "
+                "сработают; кастом-фильтры включаются через "
+                "bot.add_custom_filter(...) (готовые лежат "
+                "в maxibot.custom_filters)",
+                ", ".join(repr(key) for key in unknown))
+
     def run_handler(self, context: Message, message_handlers: List[Dict]):
         """
         Метод запуска обработчиков событий текстового сообщения
@@ -1496,28 +1725,45 @@ class MaxiBot:
                     self._exec_task(handler.get("function"), context)
                 break
 
-    def _test_filter(self, message_filter: str, filter_value: List, context: Message):
+    def _test_filter(self, message_filter: str, filter_value: List, context):
         """
-        Метод проверки соответствия сообщения всем фильтрам текстовых сообщений
+        Проверяет объект по одному фильтру — как telebot._test_filter.
+        Объектом может быть Message, CallbackQuery или
+        ChatMemberUpdated: чего у объекта нет (content_type у callback),
+        то и не совпадает — фильтр возвращает False, а не падает.
 
-        :param message_filter: Description
+        Незнакомый ключ ищется среди кастом-фильтров
+        (add_custom_filter), и если его там нет — обработчик
+        не срабатывает, о чём говорит предупреждение в лог.
+
+        :param message_filter: Ключ фильтра
         :type message_filter: str
-        :param filter_value: Description
+        :param filter_value: Значение фильтра из обработчика
         :type filter_value: List
-        :param context: Description
-        :type context: Context
+        :param context: Объект, который проверяем
         """
-
-        text = context.text
+        text = getattr(context, "text", None)
+        content_type = getattr(context, "content_type", None)
+        if message_filter == 'data':
+            # фильтр callback_query_handler(data=...) — точное совпадение
+            return getattr(context, "data", None) == filter_value
         if message_filter == 'content_types':
-            return context.content_type in filter_value
+            # значение строкой (мимо _prepare_message_filters — например
+            # через **kwargs у коллбэка) иначе давало бы TypeError на
+            # объекте без content_type и теряло всё обновление, а у
+            # сообщения матчило бы по подстроке ('text' in 'text_and')
+            if isinstance(filter_value, str):
+                filter_value = [filter_value]
+            return content_type in filter_value
         if message_filter == 'regexp':
             # как в telebot: regexp и commands применимы только к тексту
-            return context.content_type == 'text' and text and re.search(filter_value, text, re.IGNORECASE)
+            return content_type == 'text' and text and re.search(filter_value, text, re.IGNORECASE)
         elif message_filter == 'commands':
-            return context.content_type == 'text' and extract_command(text) in filter_value
+            return content_type == 'text' and extract_command(text) in filter_value
         elif message_filter == 'chat_types':
-            return context.chat.type in filter_value
+            # у callback чат берётся из сообщения с кнопкой, как в telebot
+            target = context.message if isinstance(context, CallbackQuery) else context
+            return getattr(getattr(target, "chat", None), "type", None) in filter_value
         elif message_filter == 'func':
             try:
                 return filter_value(context)
@@ -1527,58 +1773,37 @@ class MaxiBot:
                 # роняло поллинг)
                 self._report_exception(e, "Error in filter function")
                 return False
+        elif message_filter in self.custom_filters:
+            return self._check_filter(message_filter, filter_value, context)
+        self._warn_once(
+            "unknown_filter",
+            "фильтр %r не зарегистрирован — обработчик не сработает; "
+            "кастом-фильтры включаются через bot.add_custom_filter(...) "
+            "(готовые лежат в maxibot.custom_filters)", message_filter)
         return False
 
     def _check_filters(self, context, handler: Dict):
         """
-        Проверка текстового сообщения на фильтры
+        Проверяет объект по всем фильтрам обработчика — как
+        telebot._test_message_handler. Путь один для сообщений,
+        коллбэков и событий членства: кастом-фильтры работают
+        везде, как в telebot (раньше у коллбэков проверялись только
+        data и func, а остальные фильтры молча игнорировались)
 
-        :param context: Сообщение
-        :type context: Context
+        :param context: Message, CallbackQuery или ChatMemberUpdated
+        :param handler: Словарь обработчика из _build_handler_dict
         """
-        if not handler['filters']:
+        filters = handler.get('filters')
+        if not filters:
             # без фильтров обработчик матчит всё (как в telebot); у
             # message_handler при этом всегда есть content_types=['text']
             return True
-        if handler['filters']:
-            if isinstance(context, CallbackQuery):
-                # Сначала проверяем фильтр по data
-                if 'data' in handler['filters']:
-                    filter_data = handler['filters']['data']
-                    if context.data != filter_data:
-                        return False
-                func_filter = handler['filters'].get('func')
-                if func_filter:
-                    try:
-                        return func_filter(context)
-                    except Exception as e:
-                        # ошибка func-фильтра не роняет диспатч: обработчик
-                        # считается несовпавшим (в telebot такое исключение
-                        # роняло поллинг)
-                        self._report_exception(e, "Error in filter function")
-                        return False
-
-                return True
-            elif isinstance(context, Message):
-                for message_filter, filter_value in handler['filters'].items():
-                    if filter_value is None:
-                        continue
-                    if not self._test_filter(message_filter, filter_value, context):
-                        return False
-                return True
-            elif isinstance(context, ChatMemberUpdated):
-                # у my_chat_member/chat_member единственный фильтр —
-                # func (как в telebot)
-                func_filter = handler['filters'].get('func')
-                if func_filter:
-                    try:
-                        return bool(func_filter(context))
-                    except Exception as e:
-                        # ошибка func-фильтра не роняет диспатч
-                        self._report_exception(e, "Error in filter function")
-                        return False
-                return True
-            return False
+        for message_filter, filter_value in filters.items():
+            if filter_value is None:
+                continue
+            if not self._test_filter(message_filter, filter_value, context):
+                return False
+        return True
 
     def _process_text_message(self, context: Message):
         """
@@ -1724,10 +1949,10 @@ class MaxiBot:
             raw_type = "dialog"
         else:
             raw_type = "channel" if update.get("is_channel") else "chat"
-        # телеботовские имена, как у get_chat (private/group/channel) —
-        # ChatMemberUpdated целиком телеботовский тип; сырой тип MAX
-        # остаётся только у message.chat (историческое поведение)
+        # телеботовские имена (private/group/channel), как везде;
+        # сырой тип MAX — в max_type
         chat.type = Chat._CHAT_TYPE_MAP.get(raw_type, raw_type)
+        chat.max_type = raw_type
 
         if update_type in _MY_CHAT_MEMBER_TRANSITIONS:
             old_status, new_status = _MY_CHAT_MEMBER_TRANSITIONS[update_type]
@@ -1801,6 +2026,11 @@ class MaxiBot:
         :type parsed: Optional[Update]
         """
         try:
+            if not self._filter_keys_checked:
+                # свой цикл get_updates и своя webhook-интеграция
+                # проходят мимо start()/start_webhook() — проверяем
+                # ключи на первом же обновлении
+                self._warn_unknown_filter_keys()
             update_type = update.get("update_type")
             if update_type == UpdateType.BOT_ADDED:
                 # MAX присылает bot_added дважды подряд — точный дубль
@@ -1877,10 +2107,13 @@ class MaxiBot:
             if upd.chat_member is not None:
                 self.process_new_chat_member([upd.chat_member])
             if upd.message is not None:
-                if getattr(upd.message.chat, "type", None) == "channel":
+                if (update_type == UpdateType.MESSAGE_CREATED
+                        and getattr(upd.message.chat, "type", None) == "channel"):
                     # посты каналов — только в канальные обработчики, как
                     # в telebot (до message_handlers и next_step не доходят;
-                    # у поста от имени канала from_user равен None)
+                    # у поста от имени канала from_user равен None).
+                    # Именно message_created: bot_added в канал — не пост,
+                    # его Message должен идти обычным путём
                     self.process_new_channel_posts([upd.message])
                     return
                 # дальше — публичная точка пайплайна: next_step,
@@ -2108,6 +2341,7 @@ class MaxiBot:
         self._webhook = WebhookServer(
             host=host, port=port, secret=secret, on_error=self._report_exception
         )
+        self._warn_unknown_filter_keys()
         self._webhook.start(handler=self._process_update)
         self.is_running = True
 
@@ -4293,10 +4527,10 @@ class MaxiBot:
         для диалогов — first_name/last_name/username собеседника.
         Дополнительно поля MAX: status, participants_count, is_public.
 
-        Отличие от message.chat: там type — сырой тип MAX
-        ("dialog"/"chat"/"channel"), исторически; у get_chat —
-        телеботовские имена, чтобы работали перенесённые проверки
-        вида chat.type == "private". Остальные атрибуты
+        Имена типа одинаковы везде, где есть chat.type: у get_chat,
+        у message.chat и у ChatMemberUpdated.chat — перенесённая
+        проверка вида chat.type == "private" работает. Сырой тип MAX
+        лежит рядом, в chat.max_type. Остальные атрибуты
         telebot.types.Chat существуют и равны None (permissions,
         is_forum и т.п. — в MAX их нет); bio диалога — описание
         профиля собеседника.

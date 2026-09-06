@@ -68,7 +68,7 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 ## class maxibot.types.ChatMemberUpdated(chat, from_user, date, old_chat_member, new_chat_member, invite_link, via_chat_folder_invite_link)
 Изменение статуса участника — как telebot.types.ChatMemberUpdated (включая property difference). Синтезируется из обновлений MAX: my_chat_member — bot_added/bot_removed (left↔member), bot_started/bot_stopped (kicked↔member, аналог разблокировки/блокировки); chat_member — user_added/user_removed (left↔member)  
 **Параметры:**
-* **chat** (`Chat`) - Чат события (лёгкий: id и type, без похода в API — у bot_removed бот уже удалён из чата). type — телеботовский: private/group/channel (в отличие от message.chat.type, где исторически сырые dialog/chat/channel)  
+* **chat** (`Chat`) - Чат события (лёгкий: id и type, без похода в API — у bot_removed бот уже удалён из чата). type — телеботовский: private/group/channel, как и у message.chat; сырой тип MAX — в max_type  
 * **from_user** (`User`) - Инициатор (кто добавил/удалил); по ссылке вошёл/сам вышел — сам пользователь, со всеми полями. id — идентификатор ПОЛЬЗОВАТЕЛЯ, а не чата (в отличие от message.from_user.id): для ответа берите chat.id. Когда инициатор пришёл как inviter_id/admin_id (посторонний), известен только его id — имени и username MAX не присылает; language_code заполняется лишь у bot_started/bot_stopped (там есть user_locale)  
 * **difference** (`property`) - Разница old/new в формате telebot ({'status': ['left', 'member']}); производное is_member в разницу не попадает — как и в telebot  
 * **date** (`int`) - Unix-время в СЕКУНДАХ, как в telebot (не datetime, в отличие от Message.date)  
@@ -102,10 +102,11 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 Класс чата  
 **Параметры:**
 * **id** (`str`) - Идентификатор чата  
-* **type** (`str`) - Тип чата (в message.chat — сырой тип MAX: dialog/chat/channel)  
+* **type** (`str`) - Тип чата телеботовскими именами: dialog → private, chat → group, channel → channel. Одинаково у message.chat, get_chat и ChatMemberUpdated.chat, поэтому перенесённое `if message.chat.type == "private"` работает. Супергрупп в MAX нет — групповой чат один, ему соответствует group  
+* **max_type** (`str`) - Тип чата как его называет MAX: dialog/chat/channel (у Message из результата edit_*-методов неизвестен и равен None — MAX его не присылает)  
 * **user_id** (`str`) - Идетификатор пользователя, если сообщение было отправлено пользователю  
 
-Классметод `Chat.from_chat_info(info, api)` строит Chat из ответа GET /chats/{chatId} (используется bot.get_chat): id, type с телеботовскими именами (dialog → private, chat → group, channel → channel), title, description, photo (URL иконки), pinned_message (Message или None), invite_link, для диалогов — first_name/last_name/username собеседника; дополнительно status, participants_count, is_public  
+Классметод `Chat.from_chat_info(info, api)` строит Chat из ответа GET /chats/{chatId} (используется bot.get_chat): id, type и max_type, title, description, photo (URL иконки), pinned_message (Message или None), invite_link, для диалогов — first_name/last_name/username собеседника; дополнительно status, participants_count, is_public  
 ## class maxibot.types.User(update: Dict[str, Any])
 Класс пользователя  
 **Параметры:**

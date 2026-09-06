@@ -908,18 +908,24 @@ class Chat(JsonDeserializable):
         if update.get("update_type") == UpdateType.BOT_STARTED:
             self.id = update.get("chat_id")
             self.title = self.get_chat_title(chat_id=self.id)
-            self.type = "dialog"
+            self.max_type = "dialog"
             self.user_id = None
         elif update.get("update_type") == UpdateType.BOT_ADDED:
             self.id = update.get("chat_id")
             self.title = self.get_chat_title(chat_id=self.id)
-            self.type = None
+            # у bot_added recipient нет, но есть флаг is_channel —
+            # тот же вывод, что и у ChatMemberUpdated этого события
+            self.max_type = "channel" if update.get("is_channel") else "chat"
             self.user_id = None
         else:
             self.id = update.get("message").get("recipient").get("chat_id")
             self.title = self.get_chat_title(chat_id=self.id)
-            self.type = update.get("message").get("recipient").get("chat_type")
+            self.max_type = update.get("message").get("recipient").get("chat_type")
             self.user_id = update.get("message").get("recipient").get("user_id")
+        # type - телеботовское имя (private/group/channel), как у
+        # get_chat и ChatMemberUpdated; сырой тип MAX остаётся
+        # в max_type
+        self.type = self._CHAT_TYPE_MAP.get(self.max_type, self.max_type)
 
     def get_chat_title(self, chat_id: str):
         """
@@ -937,6 +943,11 @@ class Chat(JsonDeserializable):
 
     # маппинг типов чата MAX -> имена telebot (channel совпадает)
     _CHAT_TYPE_MAP = {"dialog": "private", "chat": "group"}
+
+    # обратная сторона: телеботовские имена, которые может написать
+    # перенесённый бот. supergroup отдельного аналога в MAX не имеет -
+    # групповой чат там один, поэтому group и supergroup - одно и то же
+    _TELEBOT_CHAT_TYPES = frozenset(("private", "group", "supergroup", "channel"))
 
     # атрибуты telebot.types.Chat 4.15.4 — у результата get_chat
     # выставляются в None до заполнения реальных полей, чтобы
@@ -974,8 +985,8 @@ class Chat(JsonDeserializable):
         is_forum и т.п.). Дополнительно поля MAX: status,
         participants_count, is_public.
 
-        Отличие от message.chat: там type — сырой тип MAX
-        ("dialog"/"chat"/"channel"), исторически.
+        Сырой тип MAX лежит рядом, в max_type ("dialog"/"chat"/
+        "channel") — так же, как у message.chat.
         """
         chat = cls.__new__(cls)
         # сначала все телеботовские атрибуты None, реальные значения
@@ -986,6 +997,7 @@ class Chat(JsonDeserializable):
         chat.id = info.get("chat_id")
         raw_type = info.get("type")
         chat.type = cls._CHAT_TYPE_MAP.get(raw_type, raw_type)
+        chat.max_type = raw_type
         chat.title = info.get("title")
         chat.description = info.get("description")
         icon = info.get("icon") or {}

@@ -3,8 +3,9 @@
 get_chat, get_chat_member_count (+ устаревший алиас), set_chat_title,
 set_chat_description, set_chat_photo, delete_chat_photo.
 
-Типы чатов MAX мапятся в телеботовские у get_chat: dialog -> private,
-chat -> group, channel -> channel (message.chat.type исторически сырой).
+Типы чатов MAX мапятся в телеботовские везде, где есть chat.type:
+dialog -> private, chat -> group, channel -> channel; сырой тип MAX
+лежит в chat.max_type.
 
 Запуск:
     python3 tests/test_chat_methods.py

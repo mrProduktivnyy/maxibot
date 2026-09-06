@@ -70,15 +70,13 @@ def membership_update(update_type, **extra):
     return upd
 
 
-# 1. Сигнатуры как в telebot (без **kwargs — кастом-фильтры это №17)
+# 1. Сигнатуры как в telebot (вместе с **kwargs под кастом-фильтры)
 for name in ("my_chat_member_handler", "chat_member_handler",
              "add_my_chat_member_handler", "add_chat_member_handler",
              "register_my_chat_member_handler", "register_chat_member_handler",
              "process_new_my_chat_member", "process_new_chat_member"):
     maxi_params = inspect.signature(getattr(MaxiBot, name)).parameters
-    tele_params = {n: p for n, p in
-                   inspect.signature(getattr(telebot.TeleBot, name)).parameters.items()
-                   if p.kind is not inspect.Parameter.VAR_KEYWORD}
+    tele_params = inspect.signature(getattr(telebot.TeleBot, name)).parameters
     assert list(maxi_params) == list(tele_params), (name, list(maxi_params), list(tele_params))
     for param in tele_params:
         assert maxi_params[param].default == tele_params[param].default, (name, param)

@@ -77,14 +77,11 @@ def edited_update(text="привет", attachments=None, update_type="message_ed
     }
 
 
-# 1. Сигнатуры как в telebot (у telebot есть **kwargs под кастом-фильтры —
-#    их в maxibot пока нет, №17; сравниваем остальные параметры)
+# 1. Сигнатуры как в telebot (вместе с **kwargs под кастом-фильтры)
 for name in ("edited_message_handler", "add_edited_message_handler",
              "register_edited_message_handler"):
     maxi_params = inspect.signature(getattr(MaxiBot, name)).parameters
-    tele_params = {n: p for n, p in
-                   inspect.signature(getattr(telebot.TeleBot, name)).parameters.items()
-                   if p.kind is not inspect.Parameter.VAR_KEYWORD}
+    tele_params = inspect.signature(getattr(telebot.TeleBot, name)).parameters
     assert list(maxi_params) == list(tele_params), (name, list(maxi_params))
     for param in tele_params:
         assert maxi_params[param].default == tele_params[param].default, (name, param)
@@ -270,8 +267,8 @@ bot._process_update({
 })
 assert got == [bot], got
 
-# 11. chat_types сверяется с сырыми типами MAX (dialog/chat/channel) —
-#     задокументированная особенность, телеботовский 'private' не совпадёт
+# 11. chat_types принимает и телеботовские имена, и сырые типы MAX
+#     (нормализация из №17): совпадают оба, срабатывает первый
 bot = make_bot()
 got = []
 bot.register_edited_message_handler(lambda m: got.append("private"),
@@ -279,7 +276,14 @@ bot.register_edited_message_handler(lambda m: got.append("private"),
 bot.register_edited_message_handler(lambda m: got.append("dialog"),
                                     chat_types=["dialog"])
 bot._process_update(edited_update(text="в личке"))
+assert got == ["private"], got
+
+bot = make_bot()
+got = []
+bot.register_edited_message_handler(lambda m: got.append("dialog"),
+                                    chat_types=["dialog"])
+bot._process_update(edited_update(text="в личке"))
 assert got == ["dialog"], got
-print("10-11 ok: pass_bot у callback, chat_types — сырые типы MAX")
+print("10-11 ok: pass_bot у callback, chat_types — оба словаря имён")
 
 print("ALL OK")

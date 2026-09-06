@@ -57,15 +57,13 @@ def post_update(text="пост", update_type="message_created", sender=None,
     }
 
 
-# 1. Сигнатуры как в telebot (без **kwargs — кастом-фильтры это №17)
+# 1. Сигнатуры как в telebot (вместе с **kwargs под кастом-фильтры)
 for name in ("channel_post_handler", "edited_channel_post_handler",
              "add_channel_post_handler", "add_edited_channel_post_handler",
              "register_channel_post_handler", "register_edited_channel_post_handler",
              "process_new_channel_posts", "process_new_edited_channel_posts"):
     maxi_params = inspect.signature(getattr(MaxiBot, name)).parameters
-    tele_params = {n: p for n, p in
-                   inspect.signature(getattr(telebot.TeleBot, name)).parameters.items()
-                   if p.kind is not inspect.Parameter.VAR_KEYWORD}
+    tele_params = inspect.signature(getattr(telebot.TeleBot, name)).parameters
     assert list(maxi_params) == list(tele_params), (name, list(maxi_params), list(tele_params))
     for param in tele_params:
         assert maxi_params[param].default == tele_params[param].default, (name, param)
