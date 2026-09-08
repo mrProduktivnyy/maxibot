@@ -39,6 +39,8 @@ TLS: библиотека ходит на актуальный `https://platform
     * `extra` - Дополнительные параметры запроса  
 * **get_message** (`msg_id`) - Получение сообщений по `msg_id`  
     * `msg_id` - Уникальный идентификатор сообщения  
+* **get_messages** (`chat_id`, `message_ids`, `from_time`, `to_time`, `count`, `timeout`) - История чата и/или выборка по id (`GET /messages`); сервер отдаёт от новых к старым, поэтому по спеке to < from; message_ids-список уходит через запятую  
+* **get_chats** (`count`, `marker`, `timeout`) - Постраничный список чатов бота (`GET /chats`): в ответе chats и marker следующей страницы (null — конец)  
 * **send_action** (`chat_id`, `action`, `timeout`) - Отправка действия бота в чат (`POST /chats/{chatId}/actions`): участники видят индикатор «печатает…» и т.п.  
     * `chat_id` - Уникальный идентификатор чата  
     * `action` - Действие MAX (enum SenderAction): `typing_on`, `sending_photo`, `sending_video`, `sending_audio`, `sending_file`  

@@ -54,6 +54,11 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **message_id** (`str`) - mid исходного сообщения (link.message.mid; раньше поле было всегда None) — по нему работает register_for_reply  
 * **from_user** (`maxibot.types.User`) - Пользователь, отправивший исходное сообщение; пока всегда None  
 * **chat** (`maxibot.types.ChatLink`) - Объект чата, в котором отправлено сообщение  
+## class maxibot.types.ChatList(response: Dict[str, Any], api: Api)
+Страница списка чатов бота — результат bot.get_chats (MAX-бонус). Ведёт себя как список Chat (итерация, len, индексация)  
+**Параметры:**
+* **chats** (`List[Chat]`) - Чаты страницы (собраны через Chat.from_chat_info — без походов в сеть)  
+* **marker** - Маркер следующей страницы для bot.get_chats(marker=...); None — страниц больше нет  
 ## class maxibot.types.ChatMember(member: Dict[str, Any], status: Optional[str])
 Участник чата — результат get_chat_member, get_chat_administrators и get_chat_membership; собирается из объекта ChatMember MAX (GET /chats/{chatId}/members)  
 **Параметры:**

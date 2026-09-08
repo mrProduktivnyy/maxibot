@@ -1036,6 +1036,42 @@ class Chat(JsonDeserializable):
         return chat
 
 
+class ChatList(JsonDeserializable):
+    """
+    Страница списка чатов бота — результат bot.get_chats
+    (GET /chats). MAX-бонус: Telegram Bot API списка чатов не даёт.
+
+    Ведёт себя как список Chat (итерация, len, индексация), а marker
+    следующей страницы лежит рядом — для ручной пагинации; обход всех
+    страниц сразу — bot.iter_chats().
+
+    :param response: Ответ GET /chats ({"chats": [...], "marker": ...})
+    :type response: Dict[str, Any]
+
+    :param api: Объект API (нужен чатам для достройки)
+    :type api: Api
+    """
+
+    def __init__(self, response: Dict[str, Any], api: Api):
+        raw = response.get("chats") if isinstance(response, dict) else None
+        self.chats: List[Chat] = [
+            Chat.from_chat_info(info, api)
+            for info in raw or ()
+            if isinstance(info, dict)
+        ]
+        # маркер следующей страницы; None — страниц больше нет
+        self.marker = response.get("marker") if isinstance(response, dict) else None
+
+    def __iter__(self):
+        return iter(self.chats)
+
+    def __len__(self) -> int:
+        return len(self.chats)
+
+    def __getitem__(self, item):
+        return self.chats[item]
+
+
 class ChatMember(JsonDeserializable):
     """
     Класс участника чата — результат bot.get_chat_member,

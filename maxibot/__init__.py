@@ -17,7 +17,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 # maxibot (у telebot так; callback_data telebot не экспонирует — и мы нет)
 from maxibot import apihelper, formatting, util
 from maxibot.apihelper import Api
-from maxibot.types import Chat, ChatMember, ChatMemberUpdated, CommentRemoved, Message, CallbackQuery, InputMedia, MessageID, Update, User
+from maxibot.types import Chat, ChatList, ChatMember, ChatMemberUpdated, CommentRemoved, Message, CallbackQuery, InputMedia, MessageID, Update, User
 from maxibot.types import BotCommand, BotName, BotDescription, BotShortDescription
 from maxibot.types import File, Video
 from maxibot.types import UpdateType, InlineKeyboardMarkup
@@ -5523,6 +5523,153 @@ class MaxiBot:
         update = {"update_type": "get_message"}
         update["message"] = msg
         return Message(update=update, api=self.api)
+
+    def get_chat_history(
+        self,
+        chat_id: Union[int, str],
+        count: int = 50,
+        from_time: Optional[int] = None,
+        to_time: Optional[int] = None,
+        timeout: Optional[int] = None,
+    ) -> List[Message]:
+        """
+        Возвращает историю чата списком Message — MAX-бонус, аналога
+        в telebot нет (Telegram Bot API историю ботам не отдаёт).
+        GET /messages?chat_id=...
+
+        Сервер отдаёт сообщения ОТ НОВЫХ К СТАРЫМ: свежее — первым
+        в списке. Из-за обратного порядка from_time — поздняя граница,
+        to_time — ранняя (по спеке to < from).
+
+        .. code-block:: python3
+
+            for msg in bot.get_chat_history(chat_id, count=20):
+                print(msg.date, msg.from_user.username, msg.text)
+
+        :param chat_id: Идентификатор чата
+        :type chat_id: Union[int, str]
+
+        :param count: Максимум сообщений (по умолчанию 50, максимум
+            сервера — 100)
+        :type count: int
+
+        :param from_time: Поздняя граница времени в миллисекундах
+        :type from_time: Optional[int]
+
+        :param to_time: Ранняя граница времени в миллисекундах
+        :type to_time: Optional[int]
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: Список сообщений, свежие первыми
+        :rtype: List[Message]
+        """
+        response = self.api.get_messages(
+            chat_id=chat_id, from_time=from_time, to_time=to_time,
+            count=count, timeout=timeout or None
+        )
+        return self._wrap_message_list(response)
+
+    def get_messages(
+        self,
+        message_ids: Union[str, List[str]],
+        timeout: Optional[int] = None,
+    ) -> List[Message]:
+        """
+        Возвращает сообщения по списку id — MAX-бонус
+        (GET /messages?message_ids=...). Одиночный id можно передать
+        строкой; для одного сообщения есть и bot.get_message(id).
+
+        :param message_ids: Список id сообщений (или один id строкой)
+        :type message_ids: Union[str, List[str]]
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: Список сообщений
+        :rtype: List[Message]
+        """
+        response = self.api.get_messages(
+            message_ids=message_ids, timeout=timeout or None
+        )
+        return self._wrap_message_list(response)
+
+    def _wrap_message_list(self, response) -> List[Message]:
+        """
+        Оборачивает ответ GET /messages ({"messages": [...]}) в список
+        Message — той же синтетической обёрткой, что get_comments
+        """
+        messages = response.get("messages") if isinstance(response, dict) else None
+        return [
+            Message(update={"message": msg, "timestamp": msg.get("timestamp")},
+                    api=self.api)
+            for msg in messages or ()
+            if isinstance(msg, dict)
+        ]
+
+    def get_chats(
+        self,
+        count: int = 50,
+        marker: Optional[int] = None,
+        timeout: Optional[int] = None,
+    ) -> ChatList:
+        """
+        Возвращает страницу списка чатов бота — MAX-бонус, аналога
+        в telebot нет (Telegram Bot API списка чатов не даёт).
+        GET /chats.
+
+        Результат ведёт себя как список Chat (итерация, len,
+        индексация), рядом — marker следующей страницы для ручной
+        пагинации (None — страниц больше нет). Обойти все страницы
+        разом — bot.iter_chats().
+
+        :param count: Чатов на страницу (по умолчанию 50, максимум
+            сервера — 100)
+        :type count: int
+
+        :param marker: Маркер страницы из прошлого ответа
+            (chat_list.marker); None — первая страница
+        :type marker: Optional[int]
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: Страница чатов
+        :rtype: ChatList
+        """
+        response = self.api.get_chats(
+            count=count, marker=marker, timeout=timeout or None
+        )
+        return ChatList(response, self.api)
+
+    def iter_chats(self, count: int = 50, timeout: Optional[int] = None):
+        """
+        Генератор по ВСЕМ чатам бота с автопагинацией — MAX-бонус:
+        листает GET /chats по marker, пока страницы не кончатся.
+
+        .. code-block:: python3
+
+            for chat in bot.iter_chats():
+                print(chat.id, chat.type, chat.title)
+
+        :param count: Чатов на страницу запроса (по умолчанию 50)
+        :type count: int
+
+        :param timeout: Таймаут каждого запроса в секундах
+        :type timeout: Optional[int]
+
+        :return: Генератор объектов Chat
+        """
+        marker = None
+        while True:
+            page = self.get_chats(count=count, marker=marker, timeout=timeout)
+            for chat in page:
+                yield chat
+            marker = page.marker
+            # пустая страница с ненулевым marker — защита от вечного цикла
+            if marker is None or not len(page):
+                return
 
     def get_me(self):
         """

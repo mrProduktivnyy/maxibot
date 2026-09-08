@@ -102,6 +102,63 @@ class Api:
         """
         return self.client.request("GET", f"/messages/{msg_id}")
 
+    def get_messages(self, chat_id=None, message_ids=None, from_time=None,
+                     to_time=None, count=None, timeout=None):
+        """
+        Апи метод получения сообщений (GET /messages): история чата
+        и/или выборка по списку id. Сервер отдаёт сообщения от новых
+        к старым (свежее — первым), поэтому по спеке to < from.
+
+        :param chat_id: Идентификатор чата — история этого чата
+        :param message_ids: Список id сообщений — забрать только их
+            (уходит query-параметром через запятую)
+        :param from_time: Начальная метка времени (миллисекунды);
+            из-за обратного порядка это ПОЗДНЯЯ граница
+        :param to_time: Конечная метка времени — РАННЯЯ граница
+        :param count: Максимум сообщений в ответе (по умолчанию
+            сервера — 50, максимум 100)
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: {"messages": [<сообщение>]}
+        :rtype: Dict[str, Any]
+        """
+        params = {}
+        if chat_id is not None:
+            params["chat_id"] = chat_id
+        if message_ids is not None:
+            if isinstance(message_ids, (list, tuple, set)):
+                message_ids = ",".join(str(m) for m in message_ids)
+            params["message_ids"] = message_ids
+        if from_time is not None:
+            params["from"] = from_time
+        if to_time is not None:
+            params["to"] = to_time
+        if count is not None:
+            params["count"] = count
+        return self.client.request("GET", "/messages", params=params, timeout=timeout)
+
+    def get_chats(self, count=None, marker=None, timeout=None):
+        """
+        Апи метод получения списка чатов бота (GET /chats) —
+        постранично: в ответе chats и marker следующей страницы
+        (null — страниц больше нет).
+
+        :param count: Чатов на страницу (по умолчанию сервера — 50,
+            максимум 100)
+        :param marker: Маркер страницы из прошлого ответа;
+            None — первая страница
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: {"chats": [<чат>], "marker": <маркер или null>}
+        :rtype: Dict[str, Any]
+        """
+        params = {}
+        if count is not None:
+            params["count"] = count
+        if marker is not None:
+            params["marker"] = marker
+        return self.client.request("GET", "/chats", params=params, timeout=timeout)
+
     def get_video(self, video_token: str, timeout=None):
         """
         Информация о видео-вложении (GET /videos/{videoToken}):
