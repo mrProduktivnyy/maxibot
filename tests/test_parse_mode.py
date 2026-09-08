@@ -84,7 +84,7 @@ def sent(bot):
 sig = inspect.signature(MaxiBot.__init__)
 assert list(sig.parameters) == [
     "self", "token", "parse_mode", "threaded", "skip_pending", "num_threads",
-    "exception_handler", "state_storage",
+    "next_step_backend", "reply_backend", "exception_handler", "state_storage",
 ], list(sig.parameters)
 assert sig.parameters["parse_mode"].default is None
 assert sig.parameters["skip_pending"].default is False

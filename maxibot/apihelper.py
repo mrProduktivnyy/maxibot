@@ -28,6 +28,8 @@ RETRY_ON_ERROR = False  # повторять запрос при сетевых 
 RETRY_TIMEOUT = 2       # пауза между повторами, секунд
 MAX_RETRIES = 15        # всего попыток при RETRY_ON_ERROR
 RETRY_ENGINE = 1        # 1 — повторы с паузой (как telebot), 2 — urllib3 Retry
+CUSTOM_SERIALIZER = None  # как telebot.apihelper.CUSTOM_SERIALIZER: свой pickle-совместимый
+                          # сериализатор (dump/load) для FileHandlerBackend (dill, cloudpickle)
 
 # TLS-проверка включена: цепочка platform-api2.max.ru подписана сертификатами
 # Минцифры, они встроены в библиотеку (core/network/cacert.py, источник —

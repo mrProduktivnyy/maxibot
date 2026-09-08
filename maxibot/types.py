@@ -1299,7 +1299,9 @@ class Link(JsonDeserializable):
     def __init__(self, link: Dict[str, Any]):
         if link:
             self.type = link.get("type")
-            self.message_id: str = None
+            # mid исходного сообщения — по спеке link.message (MessageBody)
+            # обязателен; раньше поле было всегда None
+            self.message_id: Optional[str] = (link.get("message") or {}).get("mid")
             self.from_user: Optional[User] = None
             self.chat: ChatLink = ChatLink(update=link)
 

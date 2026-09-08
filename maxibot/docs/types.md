@@ -50,9 +50,9 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 ## class maxibot.types.Link(update: Dict[str, Any])
 Класс сериализации и работы со ссылками на сообщения (отвеченные, пересланные)  
 **Параметры:**
-* **type** (`str`) - Тип сообщения  
-* **message_id** (`str`) - Идентификатор сообщения  
-* **from_user** (`maxibot.types.User`) - Пользователь, отправивший сообщение  
+* **type** (`str`) - Тип связи: 'reply' (ответ) или 'forward' (пересылка) — в MAX оба в одном поле  
+* **message_id** (`str`) - mid исходного сообщения (link.message.mid; раньше поле было всегда None) — по нему работает register_for_reply  
+* **from_user** (`maxibot.types.User`) - Пользователь, отправивший исходное сообщение; пока всегда None  
 * **chat** (`maxibot.types.ChatLink`) - Объект чата, в котором отправлено сообщение  
 ## class maxibot.types.ChatMember(member: Dict[str, Any], status: Optional[str])
 Участник чата — результат get_chat_member, get_chat_administrators и get_chat_membership; собирается из объекта ChatMember MAX (GET /chats/{chatId}/members)  

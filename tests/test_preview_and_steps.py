@@ -123,7 +123,7 @@ class FakeMessage:
 
 def make_bot():
     bot = MaxiBot("t")  # конструктор сеть не трогает
-    bot._next_steps = {}
+    bot.next_step_backend.handlers = {}
     return bot
 
 
@@ -131,23 +131,23 @@ def make_bot():
 bot = make_bot()
 msg = FakeMessage(user_id=42)
 bot.register_next_step_handler(msg, lambda m: None)
-assert 42 in bot._next_steps
+assert 42 in bot.next_step_backend.handlers
 bot.clear_step_handler(msg)
-assert 42 not in bot._next_steps
+assert 42 not in bot.next_step_backend.handlers
 print('8 ok: clear_step_handler(message)')
 
 # 9. clear_step_handler_by_chat_id(chat_id) — как в заплатке trim_bot
 bot = make_bot()
 bot.register_next_step_handler(FakeMessage(user_id=42), lambda m: None)
 bot.clear_step_handler_by_chat_id(42)
-assert 42 not in bot._next_steps
+assert 42 not in bot.next_step_backend.handlers
 print('9 ok: clear_step_handler_by_chat_id')
 
 # 10. str/int представления chat_id взаимозаменяемы
 bot = make_bot()
 bot.register_next_step_handler(FakeMessage(user_id=42), lambda m: None)
 bot.clear_step_handler_by_chat_id("42")
-assert 42 not in bot._next_steps
+assert 42 not in bot.next_step_backend.handlers
 print('10 ok: chat_id="42" снимает ключ 42')
 
 # 11. Сброс несуществующего ожидания не падает (идемпотентность)
@@ -161,7 +161,7 @@ bot = make_bot()
 bot.register_next_step_handler(FakeMessage(user_id=1), lambda m: None)
 bot.register_next_step_handler(FakeMessage(user_id=2), lambda m: None)
 bot.clear_step_handler_by_chat_id(1)
-assert 1 not in bot._next_steps and 2 in bot._next_steps
+assert 1 not in bot.next_step_backend.handlers and 2 in bot.next_step_backend.handlers
 print('12 ok: соседние ожидания не задеты')
 
 print('ALL OK')

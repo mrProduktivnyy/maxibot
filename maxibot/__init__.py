@@ -21,7 +21,9 @@ from maxibot.types import File, Video
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.custom_filters import SimpleCustomFilter, AdvancedCustomFilter
-from maxibot.handler_backends import State, StatesGroup
+from maxibot.handler_backends import (
+    FileHandlerBackend, HandlerBackend, MemoryHandlerBackend, State, StatesGroup
+)
 from maxibot.storage import StateMemoryStorage, StatePickleStorage, StateStorageBase
 from maxibot.exceptions import (
     MaxApiException,
@@ -142,6 +144,24 @@ class StepHandler:
     timestamp: float
 
 
+class Handler:
+    """
+    Ожидающий (next step | reply) обработчик — как telebot.Handler:
+    callback с запомненными args/kwargs, доступ и по атрибутам,
+    и по ключам. Лежит в HandlerBackend и переживает рестарт через
+    enable_save_*_handlers (pickle), поэтому callback должен быть
+    именованной функцией уровня модуля, не лямбдой
+    """
+
+    def __init__(self, callback, *args, **kwargs):
+        self.callback = callback
+        self.args = args
+        self.kwargs = kwargs
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+
 class ExceptionHandler:
     """
     Базовый класс обработчика ошибок — как telebot.ExceptionHandler.
@@ -217,6 +237,8 @@ class MaxiBot:
         threaded: bool = True,
         skip_pending: bool = False,
         num_threads: int = 2,
+        next_step_backend: Optional[HandlerBackend] = None,
+        reply_backend: Optional[HandlerBackend] = None,
         exception_handler: Optional[ExceptionHandler] = None,
         state_storage: Optional[StateStorageBase] = None
     ):
@@ -249,6 +271,17 @@ class MaxiBot:
             (используется при threaded=True). По умолчанию 2, как в telebot
         :type num_threads: int
 
+        :param next_step_backend: Хранилище ожидающих
+            register_next_step_handler — наследник HandlerBackend из
+            maxibot.handler_backends (по умолчанию MemoryHandlerBackend;
+            FileHandlerBackend переживает рестарт). Позиция в сигнатуре —
+            как в telebot (сразу после num_threads)
+        :type next_step_backend: Optional[HandlerBackend]
+
+        :param reply_backend: Хранилище ожидающих register_for_reply —
+            наследник HandlerBackend (по умолчанию MemoryHandlerBackend)
+        :type reply_backend: Optional[HandlerBackend]
+
         :param exception_handler: Обработчик ошибок — наследник
             ExceptionHandler с методом handle(exception) -> bool, как в
             telebot. Получает исключения обработчиков, middleware,
@@ -257,8 +290,8 @@ class MaxiBot:
             вернул истину — ошибка считается обработанной и не логируется;
             иначе — logger.error в логгер 'maxibot' и traceback на уровне
             DEBUG. Можно назначить и позже: bot.exception_handler = ...
-            Передавайте по имени: в telebot этот параметр стоит после
-            next_step_backend и reply_backend, которых в maxibot нет
+            Позиция — как в telebot: после next_step_backend
+            и reply_backend; надёжнее передавать по имени
         :type exception_handler: Optional[ExceptionHandler]
 
         :param state_storage: Хранилище состояний FSM (bot.set_state и
@@ -289,6 +322,9 @@ class MaxiBot:
         self.threaded = threaded
         self.num_threads = num_threads
         self.exception_handler = exception_handler
+        # хранилища ожидающих обработчиков; имена атрибутов — как в telebot
+        self.next_step_backend = next_step_backend or MemoryHandlerBackend()
+        self.reply_backend = reply_backend or MemoryHandlerBackend()
         # хранилище состояний FSM; имя атрибута — как в telebot
         self.current_states = (
             state_storage if state_storage is not None else StateMemoryStorage()
@@ -352,7 +388,6 @@ class MaxiBot:
         # Сколько секунд ждать фактической публикации сообщения с файлом в
         # чате, чтобы следующие отправленные сообщения не появились раньше него.
         self.publish_wait_timeout = 10
-        self._next_steps: Dict[int, StepHandler] = {}
 
     @staticmethod
     def _build_handler_dict(handler: HandlerFunc, pass_bot=False, **filters):
@@ -1329,20 +1364,46 @@ class MaxiBot:
         """
         remaining = []
         for message in new_messages:
-            # ключ — chat.id (см. register_next_step_handler); атомарный
-            # pop, потому что clear_step_handler может выполняться
-            # в воркере параллельно
+            # ключ — chat.id (см. register_next_step_handler); get_handlers
+            # снимает запись атомарно (pop), потому что clear_step_handler
+            # может выполняться в воркере параллельно. Обработчиков может
+            # быть несколько — заберут сообщение все, как в telebot
             chat_id = getattr(getattr(message, "chat", None), "id", None)
-            handler = self._next_steps.pop(chat_id, None) if chat_id is not None else None
-            if handler is not None:
-                self._exec_task(handler.callback, message, *handler.args, **handler.kwargs)
+            handlers = (self.next_step_backend.get_handlers(chat_id)
+                        if chat_id is not None else None)
+            if handlers:
+                for handler in handlers:
+                    self._exec_task(handler["callback"], message,
+                                    *handler["args"], **handler["kwargs"])
                 continue
             remaining.append(message)
         if not remaining:
             return
+        # ответы на ожидаемые сообщения — после next_step, до слушателей
+        # (порядок telebot); сообщение идёт дальше по пайплайну
+        self._notify_reply_handlers(remaining)
         self._notify_update(remaining)
         for message in remaining:
             self._process_text_message(message)
+
+    def _notify_reply_handlers(self, new_messages) -> None:
+        """
+        Отдаёт сообщения-ответы ожидающим register_for_reply — как
+        telebot._notify_reply_handlers (диспатч по mid исходного
+        сообщения). В MAX ответ и пересылка лежат в одном поле link,
+        поэтому пересылки (link.type == 'forward') ответами не считаются
+        """
+        for message in new_messages:
+            reply_to = getattr(message, "reply_to_message", None)
+            if reply_to is None:
+                continue
+            if getattr(reply_to, "type", None) == "forward":
+                continue
+            handlers = self.reply_backend.get_handlers(reply_to.message_id)
+            if handlers:
+                for handler in handlers:
+                    self._exec_task(handler["callback"], message,
+                                    *handler["args"], **handler["kwargs"])
 
     def process_new_edited_messages(self, new_edited_message: List[Message]):
         """
@@ -2463,17 +2524,31 @@ class MaxiBot:
         :param kwargs:
         """
 
-        handler = StepHandler(
-            callback=callback,
-            args=args,
-            kwargs=kwargs,
-            timestamp=time.time()
-        )
-        # ключ — chat.id, как в telebot (register_next_step_handler там
-        # делегирует в *_by_chat_id) и как clear_step_handler ниже;
+        # ключ — chat.id, как в telebot (делегат *_by_chat_id);
         # для входящих значение совпадает с from_user.id (User.id — это
         # chat_id), а from_user=None (пост канала) не роняет регистрацию
-        self._next_steps[message.chat.id] = handler
+        self.register_next_step_handler_by_chat_id(
+            message.chat.id, callback, *args, **kwargs)
+
+    def register_next_step_handler_by_chat_id(
+            self, chat_id: Union[int, str], callback: Callable, *args, **kwargs) -> None:
+        """
+        Регистрирует callback на следующее сообщение в чате chat_id —
+        как telebot.register_next_step_handler_by_chat_id. Обработчиков
+        может копиться несколько (как в telebot): следующее сообщение
+        заберут все разом, в порядке регистрации.
+
+        Для сохранения обработчиков (enable_save_next_step_handlers)
+        callback должен быть именованной функцией уровня модуля —
+        лямбда pickle не переживёт.
+
+        :param chat_id: Чат, следующего сообщения которого ждём
+        :param callback: Функция обратного вызова
+        :param args: Дополнительные позиционные аргументы callback
+        :param kwargs: Дополнительные именованные аргументы callback
+        """
+        self.next_step_backend.register_handler(
+            chat_id, Handler(callback, *args, **kwargs))
 
     def clear_step_handler(self, message: Message) -> None:
         """
@@ -2502,13 +2577,138 @@ class MaxiBot:
 
         :return: None
         """
-        self._next_steps.pop(chat_id, None)
-        # register_next_step_handler мог положить ключ и как int, и как str —
+        self.next_step_backend.clear_handlers(chat_id)
+        # регистрация могла положить ключ и как int, и как str —
         # подчищаем оба представления
         if isinstance(chat_id, str) and chat_id.isdigit():
-            self._next_steps.pop(int(chat_id), None)
+            self.next_step_backend.clear_handlers(int(chat_id))
         elif isinstance(chat_id, int):
-            self._next_steps.pop(str(chat_id), None)
+            self.next_step_backend.clear_handlers(str(chat_id))
+
+    def enable_save_next_step_handlers(
+            self, delay: Optional[int] = 120,
+            filename: Optional[str] = "./.handler-saves/step.save"):
+        """
+        Включает сохранение next_step-обработчиков в pickle-файл — как
+        telebot.enable_save_next_step_handlers: хранилище подменяется на
+        FileHandlerBackend с записью по таймеру (delay секунд после
+        изменения; 0 — сразу). Уже накопленные обработчики переезжают.
+        Callback-и должны быть именованными функциями уровня модуля
+
+        :param delay: Задержка записи после изменения, секунд
+        :param filename: Файл сохранения
+        """
+        self.next_step_backend = FileHandlerBackend(
+            self.next_step_backend.handlers, filename, delay)
+
+    def disable_save_next_step_handlers(self):
+        """
+        Выключает сохранение next_step-обработчиков (обратно в память) —
+        как telebot.disable_save_next_step_handlers; накопленные
+        обработчики переезжают
+        """
+        self.next_step_backend = MemoryHandlerBackend(
+            self.next_step_backend.handlers)
+
+    def load_next_step_handlers(self, filename="./.handler-saves/step.save",
+                                del_file_after_loading=True):
+        """
+        Загружает сохранённые next_step-обработчики из файла — как
+        telebot.load_next_step_handlers. Работает после
+        enable_save_next_step_handlers (у памяти, как в telebot,
+        загрузки нет)
+
+        :param filename: Файл сохранения
+        :param del_file_after_loading: Удалить файл после загрузки
+        """
+        self.next_step_backend.load_handlers(filename, del_file_after_loading)
+
+    def register_for_reply(self, message: Message, callback: Callable,
+                           *args, **kwargs) -> None:
+        """
+        Регистрирует callback на ОТВЕТ на message — как
+        telebot.register_for_reply: когда придёт сообщение с
+        reply_to_message на этот message_id, callback получит его.
+        Пересылка исходного сообщения (в MAX ответ и пересылка лежат
+        в одном поле link) ответом не считается.
+
+        Сообщение при этом идёт и дальше по пайплайну (слушатели,
+        message_handler) — как в telebot.
+
+        :param message: Сообщение, ответа на которое ждём
+        :param callback: Функция обратного вызова
+        :param args: Дополнительные позиционные аргументы callback
+        :param kwargs: Дополнительные именованные аргументы callback
+        """
+        self.register_for_reply_by_message_id(
+            message.message_id, callback, *args, **kwargs)
+
+    def register_for_reply_by_message_id(
+            self, message_id: str, callback: Callable, *args, **kwargs) -> None:
+        """
+        Регистрирует callback на ответ на сообщение message_id — как
+        telebot.register_for_reply_by_message_id (mid в MAX строковый).
+
+        Для сохранения обработчиков (enable_save_reply_handlers)
+        callback должен быть именованной функцией уровня модуля.
+
+        :param message_id: mid сообщения, ответа на которое ждём
+        :param callback: Функция обратного вызова
+        :param args: Дополнительные позиционные аргументы callback
+        :param kwargs: Дополнительные именованные аргументы callback
+        """
+        self.reply_backend.register_handler(
+            message_id, Handler(callback, *args, **kwargs))
+
+    def clear_reply_handlers(self, message: Message) -> None:
+        """
+        Сбрасывает ожидание ответа на message — как
+        telebot.clear_reply_handlers
+
+        :param message: Сообщение, ожидание ответа на которое снимается
+        """
+        self.clear_reply_handlers_by_message_id(message.message_id)
+
+    def clear_reply_handlers_by_message_id(self, message_id: str) -> None:
+        """
+        Сбрасывает ожидание ответа на сообщение message_id — как
+        telebot.clear_reply_handlers_by_message_id
+
+        :param message_id: mid сообщения
+        """
+        self.reply_backend.clear_handlers(message_id)
+
+    def enable_save_reply_handlers(self, delay=120,
+                                   filename="./.handler-saves/reply.save"):
+        """
+        Включает сохранение reply-обработчиков в pickle-файл — как
+        telebot.enable_save_reply_handlers (FileHandlerBackend, запись
+        по таймеру; накопленные обработчики переезжают)
+
+        :param delay: Задержка записи после изменения, секунд
+        :param filename: Файл сохранения
+        """
+        self.reply_backend = FileHandlerBackend(
+            self.reply_backend.handlers, filename, delay)
+
+    def disable_save_reply_handlers(self):
+        """
+        Выключает сохранение reply-обработчиков (обратно в память) — как
+        telebot.disable_save_reply_handlers
+        """
+        self.reply_backend = MemoryHandlerBackend(self.reply_backend.handlers)
+
+    def load_reply_handlers(self, filename="./.handler-saves/reply.save",
+                            del_file_after_loading=True):
+        """
+        Загружает сохранённые reply-обработчики из файла — как
+        telebot.load_reply_handlers. Работает после
+        enable_save_reply_handlers (у памяти, как в telebot, загрузки нет)
+
+        :param filename: Файл сохранения
+        :param del_file_after_loading: Удалить файл после загрузки
+        """
+        self.reply_backend.load_handlers(filename, del_file_after_loading)
 
     # -------------------------------------------------------------------------
     # Webhook

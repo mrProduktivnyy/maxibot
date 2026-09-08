@@ -52,7 +52,7 @@ sig = inspect.signature(MaxiBot.__init__)
 params = list(sig.parameters)
 assert params == [
     "self", "token", "parse_mode", "threaded", "skip_pending", "num_threads",
-    "exception_handler", "state_storage",
+    "next_step_backend", "reply_backend", "exception_handler", "state_storage",
 ], params
 assert sig.parameters["threaded"].default is True
 assert sig.parameters["num_threads"].default == 2
