@@ -3,7 +3,7 @@
 Базовый класс обработчика ошибок — как `telebot.ExceptionHandler`. Наследник с методом `handle(exception) -> bool` передаётся в `MaxiBot(exception_handler=...)` и получает исключения обработчиков, middleware, func-фильтров, цикла поллинга и webhook-сервера (Sentry, алерты, своё логирование). `handle()` вернул истину — ошибка считается обработанной и никуда не пишется; False/None — уходит в логгер `maxibot`: `logger.error`, traceback на уровне DEBUG. print в stdout библиотека больше не использует. Необработанные ошибки бот не останавливают (как `infinity_polling` в telebot). Мимо exception_handler проходят только парс-ошибки Update (непонятный payload) — они логируются на ERROR с traceback, а обновление уходит в общие middleware с сырым json  
 **Методы:**
 * **handle** (`exception`) - Вызывается для каждой перехваченной ошибки; по умолчанию возвращает `False`  
-## class maxibot.__init__.MaxiBot(token, parse_mode, threaded, skip_pending, num_threads, exception_handler)
+## class maxibot.__init__.MaxiBot(token, parse_mode, threaded, skip_pending, num_threads, exception_handler, state_storage)
 Класс бота MAX  
 **Параметры:**
 * **token** (`str`) - Токен бота  
@@ -12,6 +12,7 @@
 * **skip_pending** (`bool`) - Пропустить обновления, накопленные до запуска  
 * **num_threads** (`int`) - Размер пула потоков (по умолчанию 2, как в telebot)  
 * **exception_handler** (`ExceptionHandler`) - Обработчик ошибок с методом `handle(exception) -> bool`; передавайте по имени (в telebot перед ним стоят next_step_backend и reply_backend, которых в maxibot нет). Можно назначить и позже: `bot.exception_handler = ...`  
+* **state_storage** (`StateStorageBase`) - Хранилище состояний FSM (см. docs/states.md): StateMemoryStorage (по умолчанию), StatePickleStorage, StateRedisStorage из maxibot.storage; передавайте по имени. Отличие от telebot: там дефолтное хранилище одно на все экземпляры TeleBot процесса, в maxibot — у каждого бота своё  
 **Методы:**
 * **_build_handler_dict** (`handler`, `pass_bot`, `**filters`) - Метод, которая формирует словарь для добавления в список обработчиков событий (handler)  
     * **handler** - Функция-обработчик события  
@@ -187,6 +188,13 @@
 * **callback_query_handler** (`data` `**kwargs`) - Декоратор для регистрации обработчиков callback-запросов от inline-кнопок  
     * **data** - Данные кнопки для фильтрации  
     * **kwargs** - Дополнительные фильтры для обработчика  
+* **set_state** (`user_id`, `state`, `chat_id`) - Ставит состояние FSM — как в telebot: запись по паре (chat_id, user_id), без chat_id — chat_id=user_id (личка). state — State, строка или число. Телеботовский паттерн `bot.set_state(message.from_user.id, MyStates.name, message.chat.id)` переезжает как есть, но в maxibot from_user.id — это id ЧАТА, поэтому в группе состояние одно на чат (docs/states.md)  
+* **get_state** (`user_id`, `chat_id`) - Текущее состояние или None; State возвращается его строкой 'Группа:имя'  
+* **delete_state** (`user_id`, `chat_id`) - Удаляет состояние вместе с данными  
+* **add_data** (`user_id`, `chat_id`, `**kwargs`) - Дописывает значения в данные состояния; состояния нет — RuntimeError (у Redis — молчаливый отказ, как в telebot)  
+* **retrieve_data** (`user_id`, `chat_id`) - Контекст-менеджер данных: `with bot.retrieve_data(uid, cid) as data: ...` — внутри копия, на выходе блока сохраняется. Состояния нет — data будет None, выход из блока упадёт  
+* **reset_data** (`user_id`, `chat_id`) - Очищает данные состояния, само состояние остаётся  
+* **enable_saving_states** (`filename`) - Подменяет хранилище на StatePickleStorage (по умолчанию ./.state-save/states.pkl); уже накопленные состояния прежнего хранилища теряются — лучше сразу MaxiBot(state_storage=StatePickleStorage(...))  
 * **add_custom_filter** (`custom_filter`) - Регистрирует кастом-фильтр (полный список готовых — docs/custom_filters.md) — как в telebot: после этого ключ фильтра пишется именованным аргументом любого обработчика (`@bot.message_handler(is_digit=True)`, коллбэки и события членства тоже). Готовые фильтры — в maxibot.custom_filters (docs/custom_filters.md), свой — наследник SimpleCustomFilter или AdvancedCustomFilter. Само ничего не регистрируется (как в telebot). Незнакомый ключ фильтра обработчик не пропустит и напишет об этом в лог — в telebot он молча не срабатывал; ошибка внутри фильтра уходит в exception_handler, обработчик считается несовпавшим (как у func). У коллбэков раньше проверялись только data и func, остальные фильтры молча игнорировались — теперь проверяются все. На старте (polling/infinity_polling/start_webhook) бот один раз проверяет ключи всех зарегистрированных обработчиков и предупреждает о незарегистрированных: иначе про забытый add_custom_filter можно было узнать, только когда обработчик молча не отвечает  
 * **add_callback_query_handler** (`handler_dict`) - Добавление обработчик callback-запросов напрямую  
     * **handler_dict** - Словарь обработчика событий  

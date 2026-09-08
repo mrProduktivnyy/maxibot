@@ -23,6 +23,7 @@ from abc import ABC
 from typing import Optional, Union
 
 from maxibot import types
+from maxibot.handler_backends import State
 
 logger = logging.getLogger("maxibot")
 
@@ -453,3 +454,73 @@ class IsDigitFilter(SimpleCustomFilter):
         text = _get_text(message)
         # в telebot сообщение без текста роняло фильтр AttributeError
         return bool(text) and text.isdigit()
+class StateFilter(AdvancedCustomFilter):
+    """
+    Фильтр по состоянию FSM (ключ `state`) — как в telebot:
+
+    .. code-block:: python3
+
+        from maxibot import custom_filters
+        from maxibot.handler_backends import State, StatesGroup
+
+        bot.add_custom_filter(custom_filters.StateFilter(bot))
+
+        @bot.message_handler(state=MyStates.name)
+
+    Значение — State, строка, число, список таких или '*' (любое
+    состояние, даже когда его нет). Состояние ищется по паре
+    (chat.id, from_user.id) сообщения — теми же значениями его ставит
+    телеботовский паттерн `bot.set_state(message.from_user.id, ...,
+    message.chat.id)`. В maxibot from_user.id — это id чата, поэтому
+    в группе состояние общее на чат (см. docs/states.md).
+    """
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    key = 'state'
+
+    def check(self, message, text):
+        """
+        :meta private:
+        """
+        if text == '*':
+            return True
+
+        if isinstance(message, types.Message):
+            if message.from_user is None:
+                # пост от имени канала: пользователя нет — состояния нет
+                return False
+            chat_id = message.chat.id
+            user_id = message.from_user.id
+        elif isinstance(message, types.CallbackQuery):
+            # как в telebot: пользователь — нажавший кнопку,
+            # чат — из сообщения с клавиатурой
+            user_id = message.from_user.id
+            message = message.message
+            if message is None or getattr(message, "chat", None) is None:
+                return False
+            chat_id = message.chat.id
+        else:
+            # событие членства и т.п. — в telebot тут падал
+            # UnboundLocalError, у нас фильтр просто не совпадает
+            return False
+
+        if isinstance(text, list):
+            new_text = []
+            for i in text:
+                if isinstance(i, State):
+                    i = i.name
+                new_text.append(i)
+            text = new_text
+        elif isinstance(text, State):
+            text = text.name
+
+        # в telebot тут две ветки — группы и остальные — с одинаковым
+        # телом; сверка одна и та же
+        state = self.bot.current_states.get_state(chat_id, user_id)
+        if state == text:
+            return True
+        elif type(text) is list and state in text:
+            return True
+        return False

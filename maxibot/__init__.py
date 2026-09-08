@@ -19,6 +19,8 @@ from maxibot.types import File, Video
 from maxibot.types import UpdateType, InlineKeyboardMarkup
 from maxibot.util import extract_command, get_text, get_parse_mode, get_edit_message_data
 from maxibot.custom_filters import SimpleCustomFilter, AdvancedCustomFilter
+from maxibot.handler_backends import State, StatesGroup
+from maxibot.storage import StateMemoryStorage, StatePickleStorage, StateStorageBase
 from maxibot.exceptions import (
     MaxApiException,
     MaxApiHTTPException,
@@ -213,7 +215,8 @@ class MaxiBot:
         threaded: bool = True,
         skip_pending: bool = False,
         num_threads: int = 2,
-        exception_handler: Optional[ExceptionHandler] = None
+        exception_handler: Optional[ExceptionHandler] = None,
+        state_storage: Optional[StateStorageBase] = None
     ):
         """
         Метод инициализации бота
@@ -255,6 +258,15 @@ class MaxiBot:
             Передавайте по имени: в telebot этот параметр стоит после
             next_step_backend и reply_backend, которых в maxibot нет
         :type exception_handler: Optional[ExceptionHandler]
+
+        :param state_storage: Хранилище состояний FSM (bot.set_state и
+            родня), наследник StateStorageBase из maxibot.storage:
+            StateMemoryStorage (по умолчанию), StatePickleStorage,
+            StateRedisStorage. Передавайте по имени. Отличие от telebot:
+            там дефолтное хранилище — ОДНО на все экземпляры TeleBot
+            процесса (изменяемый дефолт в сигнатуре), в maxibot у
+            каждого бота своё
+        :type state_storage: Optional[StateStorageBase]
         """
         if parse_mode is not None and not isinstance(parse_mode, str):
             # второй позиционный параметр раньше был threaded: без этой проверки
@@ -273,6 +285,10 @@ class MaxiBot:
         self.threaded = threaded
         self.num_threads = num_threads
         self.exception_handler = exception_handler
+        # хранилище состояний FSM; имя атрибута — как в telebot
+        self.current_states = (
+            state_storage if state_storage is not None else StateMemoryStorage()
+        )
         if threaded:
             self._worker_pool = _WorkerPool(
                 num_threads=num_threads, on_error=self._report_exception
@@ -1564,6 +1580,152 @@ class MaxiBot:
         :return: None
         """
         self.add_middleware_handler(callback, update_types)
+
+    def set_state(self, user_id: int, state: Union[int, str, State],
+                  chat_id: Optional[int] = None) -> None:
+        """
+        Ставит состояние пользователя — как telebot.set_state. Запись
+        ключуется парой (chat_id, user_id); без chat_id берётся
+        chat_id = user_id — состояние в личке с ботом.
+
+        Телеботовский паттерн переезжает как есть:
+
+            bot.set_state(message.from_user.id, MyStates.name, message.chat.id)
+
+        но помните: в maxibot message.from_user.id — это id ЧАТА
+        (настоящий id пользователя лежит в from_user.real_id), поэтому
+        в группе такой вызов даёт ОДНО состояние на весь чат, а не на
+        каждого участника. В личках поведение совпадает с telebot
+        (там тоже chat.id == from_user.id). Подробности —
+        docs/states.md
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :param state: Новое состояние: State, строка или число
+        :type state: Union[int, str, State]
+
+        :param chat_id: Идентификатор чата, по умолчанию user_id
+        :type chat_id: Optional[int]
+
+        :return: None
+        """
+        if chat_id is None:
+            chat_id = user_id
+        self.current_states.set_state(chat_id, user_id, state)
+
+    def get_state(self, user_id: int,
+                  chat_id: Optional[int] = None) -> Optional[Union[int, str, State]]:
+        """
+        Текущее состояние пользователя (None, если не ставилось) —
+        как telebot.get_state. State при записи превращается в свою
+        строку 'Группа:имя', поэтому назад приходит строка
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :param chat_id: Идентификатор чата, по умолчанию user_id
+        :type chat_id: Optional[int]
+
+        :return: Состояние или None
+        """
+        if chat_id is None:
+            chat_id = user_id
+        return self.current_states.get_state(chat_id, user_id)
+
+    def delete_state(self, user_id: int, chat_id: Optional[int] = None) -> None:
+        """
+        Удаляет состояние пользователя вместе с данными —
+        как telebot.delete_state
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :param chat_id: Идентификатор чата, по умолчанию user_id
+        :type chat_id: Optional[int]
+
+        :return: None
+        """
+        if chat_id is None:
+            chat_id = user_id
+        self.current_states.delete_state(chat_id, user_id)
+
+    def add_data(self, user_id: int, chat_id: Optional[int] = None, **kwargs):
+        """
+        Дописывает значения в данные состояния — как telebot.add_data.
+        Состояние ещё не ставилось — RuntimeError (у Redis-хранилища,
+        как в telebot, молчаливый отказ): сначала bot.set_state(...)
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :param chat_id: Идентификатор чата, по умолчанию user_id
+        :type chat_id: Optional[int]
+
+        :param kwargs: Пары ключ=значение
+
+        :return: None
+        """
+        if chat_id is None:
+            chat_id = user_id
+        for key, value in kwargs.items():
+            self.current_states.set_data(chat_id, user_id, key, value)
+
+    def retrieve_data(self, user_id: int,
+                      chat_id: Optional[int] = None) -> Optional[Any]:
+        """
+        Контекст-менеджер данных состояния — как telebot.retrieve_data:
+
+            with bot.retrieve_data(user_id, chat_id) as data:
+                name = data['name']
+                data['age'] = 25
+
+        На входе — копия данных, на выходе блока она сохраняется в
+        хранилище. Как в telebot: если состояние не ставилось, `as
+        data` даст None, а выход из блока упадёт при сохранении
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :param chat_id: Идентификатор чата, по умолчанию user_id
+        :type chat_id: Optional[int]
+
+        :return: Контекст-менеджер с данными
+        """
+        if chat_id is None:
+            chat_id = user_id
+        return self.current_states.get_interactive_data(chat_id, user_id)
+
+    def reset_data(self, user_id: int, chat_id: Optional[int] = None):
+        """
+        Очищает данные состояния (само состояние остаётся) —
+        как telebot.reset_data
+
+        :param user_id: Идентификатор пользователя
+        :type user_id: int
+
+        :param chat_id: Идентификатор чата, по умолчанию user_id
+        :type chat_id: Optional[int]
+
+        :return: None
+        """
+        if chat_id is None:
+            chat_id = user_id
+        self.current_states.reset_data(chat_id, user_id)
+
+    def enable_saving_states(self, filename: Optional[str] = "./.state-save/states.pkl"):
+        """
+        Включает сохранение состояний на диск — как
+        telebot.enable_saving_states: подменяет хранилище на
+        StatePickleStorage. Уже накопленные состояния прежнего
+        хранилища при этом теряются (как в telebot), поэтому лучше
+        сразу MaxiBot(state_storage=StatePickleStorage(...))
+
+        :param filename: Путь к файлу состояний
+        :type filename: Optional[str]
+        """
+        self.current_states = StatePickleStorage(file_path=filename)
+        self.current_states.create_dir()
 
     def add_custom_filter(self, custom_filter: Union[SimpleCustomFilter, AdvancedCustomFilter]):
         """

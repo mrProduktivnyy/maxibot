@@ -33,6 +33,7 @@ def buy(message):
 * **LanguageFilter** (`language_code`) - Язык пользователя (в MAX приходит в `user_locale` и есть не у всех событий)  
 * **IsAdminFilter** (`is_chat_admin`) - Пользователь — владелец или админ чата. Создаётся с ботом: `IsAdminFilter(bot)`. Каждая проверка — запрос к API, и участники в MAX видны только администраторам: если бот не админ, запрос упадёт и обработчик не сработает  
 * **IsDigitFilter** (`is_digit`) - Текст состоит только из цифр  
+* **StateFilter** (`state`) - Состояние FSM (docs/states.md). Создаётся с ботом: `StateFilter(bot)`. Значение — State, строка, число, список таких или `'*'` (любое состояние, даже отсутствующее). Состояние ищется по паре (chat.id, from_user.id) сообщения — теми же значениями его ставит телеботовский `bot.set_state(message.from_user.id, ..., message.chat.id)`; на колбэке чат берётся из сообщения с клавиатурой. На событиях членства фильтр просто не совпадает (в telebot падал UnboundLocalError)  
 
 **TextFilter** (`equals`, `contains`, `starts_with`, `ends_with`, `ignore_case`) — значение для `text=`: `@bot.message_handler(text=TextFilter(contains=['счёт', 'аккаунт'], ignore_case=True))`. Отличия от telebot: `ignore_case` снимает регистр со ВСЕХ заданных условий (в telebot из-за `elif` — только с первого) и не портит сам фильтр; сообщение без текста даёт False, а не AttributeError.
 
