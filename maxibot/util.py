@@ -1,5 +1,6 @@
+import re
 from io import BytesIO
-from typing import Union, List, Dict, Any, Optional
+from typing import Union, List, Dict, Any, Callable, Optional
 
 try:
     # noinspection PyPackageRequirements
@@ -48,6 +49,33 @@ def extract_command(text: str) -> Union[str, None]:
     if text is None:
         return None
     return text.split()[0].split('@')[0][1:] if is_command(text) else None
+
+
+def extract_arguments(text: str) -> Union[str, None]:
+    """
+    Возвращает аргументы после команды — парный к extract_command,
+    как telebot.util.extract_arguments.
+
+    .. code-block:: python3
+        :caption: Примеры:
+
+        extract_arguments("/get name"): 'name'
+        extract_arguments("/get"): ''
+        extract_arguments("/get@botName name"): 'name'
+
+    :param text: Текст сообщения
+    :type text: str
+
+    :return: Аргументы, если text — команда (по is_command), иначе None
+    :rtype: Union[str, None]
+    """
+    if text is None:
+        # telebot на None падает TypeError; наши is_command/extract_command
+        # None-безопасны — эта пара такая же
+        return None
+    regexp = re.compile(r"/\w*(@\w*)*\s*([\s\S]*)", re.IGNORECASE)
+    result = regexp.match(text)
+    return result.group(2) if is_command(text) else None
 
 
 def is_pil_image(var) -> bool:
@@ -150,6 +178,173 @@ def smart_split(text: str, chars_per_string: int = MAX_MESSAGE_LENGTH) -> List[s
 
         parts.append(part)
         text = text[len(part):]
+
+
+def split_string(text: str, chars_per_string: int) -> List[str]:
+    """
+    Разбивает строку на части не длиннее chars_per_string символов —
+    как telebot.util.split_string. Режет по количеству символов, не
+    глядя на слова; чтобы не рвать слова — smart_split.
+
+    :param text: Текст для разбиения
+    :type text: str
+
+    :param chars_per_string: Максимальное количество символов на часть
+    :type chars_per_string: int
+
+    :return: Разбитый текст в виде списка строк
+    :rtype: List[str]
+    """
+    return [text[i:i + chars_per_string] for i in range(0, len(text), chars_per_string)]
+
+
+def escape(text: str) -> Optional[str]:
+    """
+    Экранирует HTML-символы: '&' → '&amp;', '<' → '&lt;', '>' → '&gt;' —
+    как telebot.util.escape. Для parse_mode='HTML'.
+
+    :param text: Текст для экранирования
+    :type text: str
+
+    :return: Экранированный текст (None — если пришёл None)
+    :rtype: Optional[str]
+    """
+    chars = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
+    if text is None:
+        return None
+    for old, new in chars.items():
+        text = text.replace(old, new)
+    return text
+
+
+def user_link(user, include_id: bool = False) -> str:
+    """
+    HTML-ссылка на пользователя (упоминание) — как telebot.util.user_link.
+    Не забудьте parse_mode='HTML'!
+
+    .. code-block:: python3
+        :caption: Пример:
+
+        bot.send_message(chat_id, user_link(message.from_user) + ' запустил бота!', parse_mode='HTML')
+
+    Ссылка строится по схеме MAX ``max://user/%user_id%`` (упоминание
+    без username). Берётся user.real_id — настоящий id пользователя:
+    from_user.id в maxibot всегда равен id ЧАТА (даже в диалоге это
+    id диалога, а не пользователя), и ссылка по нему вела бы в никуда.
+
+    :param user: Пользователь (объект maxibot.types.User, не user_id)
+    :type user: :class:`maxibot.types.User`
+
+    :param include_id: Дописать id пользователя после ссылки
+    :type include_id: bool
+
+    :return: HTML-ссылка
+    :rtype: str
+    """
+    user_id = getattr(user, "real_id", None)
+    if user_id is None:
+        # у поста от имени канала sender пустой (real_id нет) —
+        # хоть какой-то id лучше, чем 'None' в ссылке
+        user_id = user.id
+    name = escape(user.first_name)
+    return (f"<a href='max://user/{user_id}'>{name}</a>"
+            + (f" (<pre>{user_id}</pre>)" if include_id else ""))
+
+
+def quick_markup(values: Dict[str, Dict[str, Any]], row_width: int = 2) -> 'InlineKeyboardMarkup':
+    """
+    Собирает InlineKeyboardMarkup из словаря {'текст': kwargs} — как
+    telebot.util.quick_markup. Избавляет от вечных
+    'btn1 = InlineKeyboardButton(...)' 'btn2 = InlineKeyboardButton(...)'.
+
+    .. code-block:: python3
+        :caption: Пример:
+
+        from maxibot.util import quick_markup
+
+        markup = quick_markup({
+            'Twitter': {'url': 'https://twitter.com'},
+            'Facebook': {'url': 'https://facebook.com'},
+            'Назад': {'callback_data': 'whatever'}
+        }, row_width=2)
+        # клавиатура 2x1: Twitter и Facebook в ряд, «Назад» — ниже
+
+    В kwargs то же, что принимает maxibot.types.InlineKeyboardButton:
+    'url', 'callback_data' или 'web_app' (телеботовские
+    switch_inline_query, pay и прочие без аналога в MAX принимаются
+    и игнорируются, см. InlineKeyboardButton).
+
+    :param values: Словарь кнопок в формате {текст: kwargs}
+    :type values: Dict[str, Dict[str, Any]]
+
+    :param row_width: Кнопок в ряду
+    :type row_width: int
+
+    :return: Собранная клавиатура
+    :rtype: :class:`maxibot.types.InlineKeyboardMarkup`
+    """
+    # импорт отложенный: maxibot.types сам импортирует maxibot.util
+    from maxibot.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    markup = InlineKeyboardMarkup(row_width=row_width)
+    buttons = [
+        InlineKeyboardButton(text=text, **kwargs)
+        for text, kwargs in values.items()
+    ]
+    markup.add(*buttons)
+    return markup
+
+
+def antiflood(function: Callable, *args, number_retries=5, **kwargs):
+    """
+    Вызывает function, пережидая лимит запросов (HTTP 429) — как
+    telebot.util.antiflood. Для вызовов в цикле.
+
+    .. code-block:: python3
+        :caption: Пример:
+
+        from maxibot.util import antiflood
+
+        for chat_id in chat_id_list:
+            msg = antiflood(bot.send_message, chat_id, text)
+
+    Отличие от telebot: Telegram присылает в 429 поле retry_after,
+    MAX — нет, поэтому пауза берётся из HTTP-заголовка Retry-After,
+    а без него — 1 секунда.
+
+    :param function: Функция для вызова
+    :type function: Callable
+
+    :param number_retries: Всего попыток (не дополнительных)
+    :type number_retries: int
+
+    :param args: Позиционные аргументы function
+    :param kwargs: Именованные аргументы function
+
+    :return: Результат function
+    """
+    # импорт отложенный — как у telebot с apihelper (и чтобы maxibot.util
+    # оставался лёгким для импорта)
+    from time import sleep
+
+    from maxibot.exceptions import MaxApiHTTPException
+
+    for _ in range(number_retries - 1):
+        try:
+            return function(*args, **kwargs)
+        except MaxApiHTTPException as ex:
+            if ex.status_code == 429:
+                retry_after = (getattr(ex.result, "headers", None) or {}).get("Retry-After")
+                try:
+                    pause = float(retry_after)
+                except (TypeError, ValueError):
+                    pause = 1.0
+                sleep(pause)
+            else:
+                raise
+    else:
+        # последняя попытка — без страховки, как в telebot
+        return function(*args, **kwargs)
 
 
 def get_edit_message_data(
