@@ -2,7 +2,9 @@ import asyncio
 # import json
 import logging
 import queue
+import random
 import re
+import string
 import sys
 import threading
 import time
@@ -280,6 +282,8 @@ class MaxiBot:
                 "MaxiBot(token, threaded=False, num_threads=4)"
             )
         self.api = Api(token=token)
+        # публичный токен, как telebot.TeleBot.token
+        self.token = token
         self.parse_mode = parse_mode
         self.skip_pending = skip_pending
         self.threaded = threaded
@@ -707,6 +711,21 @@ class MaxiBot:
         if self._webhook:
             self._webhook.stop()
         self.is_running = False
+
+    def stop_polling(self):
+        """
+        Останавливает поллинг — как telebot.stop_polling. В maxibot это
+        алиас stop(): останавливается и webhook-сервер, если он запущен
+        """
+        self.stop()
+
+    def stop_bot(self):
+        """
+        Останавливает бота — как telebot.stop_bot (там stop_polling +
+        закрытие пула потоков). Пул maxibot — daemon-потоки, отдельного
+        закрытия не требуют, поэтому это тоже алиас stop()
+        """
+        self.stop()
 
     async def start(self, allowed_updates: Optional[List[str]] = None):
         """
@@ -2506,9 +2525,13 @@ class MaxiBot:
 
         :param url: Публичный HTTPS-адрес, на который MAX будет слать обновления
         :param secret: Секрет для проверки заголовка X-Max-Bot-Api-Secret (5–256 символов)
-        :param allowed_updates: Список типов обновлений (None — все)
+        :param allowed_updates: Список типов обновлений (None — все);
+            телеботовские имена нормализуются, как у polling/get_updates
         """
-        return self.api.set_webhook(url=url, update_types=allowed_updates, secret=secret)
+        return self.api.set_webhook(
+            url=url,
+            update_types=self._normalize_allowed_updates(allowed_updates),
+            secret=secret)
 
     def delete_webhook(self, url: str) -> dict:
         """
@@ -2571,6 +2594,108 @@ class MaxiBot:
                 time.sleep(0.5)
         except KeyboardInterrupt:
             self.stop()
+
+    def remove_webhook(self) -> bool:
+        """
+        Снимает ВСЕ webhook-подписки бота — как telebot.remove_webhook.
+        В telebot это set_webhook() без параметров; в MAX подписок может
+        быть несколько, поэтому перебираются GET /subscriptions
+        и каждая снимается DELETE /subscriptions
+
+        :return: True
+        """
+        info = self.api.get_webhook_info()
+        subscriptions = info.get("subscriptions") if isinstance(info, dict) else None
+        for subscription in subscriptions or []:
+            url = subscription.get("url") if isinstance(subscription, dict) else None
+            if url:
+                self.api.delete_webhook(url=url)
+        return True
+
+    def run_webhooks(
+        self,
+        listen: Optional[str] = "127.0.0.1",
+        port: Optional[int] = 443,
+        url_path: Optional[str] = None,
+        certificate: Optional[str] = None,
+        certificate_key: Optional[str] = None,
+        webhook_url: Optional[str] = None,
+        max_connections: Optional[int] = None,
+        allowed_updates: Optional[List] = None,
+        ip_address: Optional[str] = None,
+        drop_pending_updates: Optional[bool] = None,
+        timeout: Optional[int] = None,
+        secret_token: Optional[str] = None,
+        secret_token_length: Optional[int] = 20
+    ):
+        """
+        Запускает webhook-сервер с телеботовской сигнатурой — как
+        telebot.run_webhooks, делегат start_webhook (listen → host,
+        secret_token → secret). Блокирует поток до stop(), как
+        и start_webhook.
+
+        Как в telebot: без secret_token секрет генерируется случайно
+        (длина secret_token_length) и уходит в подписку — MAX будет слать
+        его в заголовке X-Max-Bot-Api-Secret, сервер его проверяет; без
+        webhook_url адрес собирается как protocol://listen:port/url_path
+        (url_path по умолчанию — токен бота), протокол https только при
+        переданном certificate. Собранный из listen адрес пригоден лишь
+        для отладки за своим прокси: MAX требует публичный HTTPS-адрес,
+        а порт сервера — из списка 80/8080/443/8443/16384–32383.
+
+        Отличия от telebot: certificate/certificate_key принимаются, но
+        локальный сервер maxibot TLS не терминирует — предупреждение
+        (снимайте TLS на прокси, self_signed_cert в подписку не
+        передаётся); max_connections, ip_address, drop_pending_updates
+        и timeout в MAX аналогов не имеют — принимаются и игнорируются
+        с предупреждением.
+
+        :param listen: Адрес для прослушивания (host у start_webhook)
+        :param port: Порт для прослушивания
+        :param url_path: Путь в собираемом webhook_url (по умолчанию
+            токен бота, как в telebot); сам сервер принимает POST
+            на любой путь
+        :param webhook_url: Готовый публичный адрес — используется
+            как есть
+        :param allowed_updates: Типы обновлений (телеботовские имена
+            нормализуются, как везде)
+        :param secret_token: Секрет подписки (5–256 символов);
+            None — сгенерировать
+        :param secret_token_length: Длина генерируемого секрета
+        """
+        ignored = {"max_connections": max_connections, "ip_address": ip_address,
+                   "drop_pending_updates": drop_pending_updates, "timeout": timeout}
+        ignored = {name: value for name, value in ignored.items() if value is not None}
+        if ignored:
+            logger.warning(
+                "run_webhooks: в MAX нет аналогов %s — параметры игнорируются",
+                sorted(ignored))
+        if certificate or certificate_key:
+            logger.warning(
+                "run_webhooks: сервер maxibot не терминирует TLS — "
+                "certificate/certificate_key игнорируются, снимайте TLS "
+                "на прокси (nginx и т.п.)")
+
+        if not secret_token:
+            secret_token = ''.join(random.choices(
+                string.ascii_uppercase + string.digits, k=secret_token_length))
+
+        if not url_path:
+            url_path = self.token + '/'
+        if url_path[-1] != '/':
+            url_path += '/'
+
+        protocol = "https" if certificate else "http"
+        if not webhook_url:
+            webhook_url = "{}://{}:{}/{}".format(protocol, listen, port, url_path)
+
+        self.start_webhook(
+            host=listen,
+            port=port,
+            secret=secret_token,
+            webhook_url=webhook_url,
+            allowed_updates=allowed_updates,
+        )
 
     def _send_attachments(self, chat_id, text, attachments, parse_mode,
                           disable_link_preview=None, notify=True, link=None,
