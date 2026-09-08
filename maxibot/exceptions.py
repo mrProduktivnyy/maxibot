@@ -70,3 +70,19 @@ class MaxApiNotReadyException(MaxApiException):
 
     def __init__(self, msg: str, function_name: str = None, result=None):
         super().__init__(msg, function_name, result)
+
+
+# Телеботовские имена исключений (telebot.apihelper.*), чтобы
+# except-код переезжал заменой импорта. Конструкторы совпадают 1:1.
+#
+# ApiTelegramException — алиас на БАЗОВЫЙ MaxApiException, а не на
+# MaxApiRequestException: Telegram шлёт осмысленные ошибки JSON-телом
+# (в telebot это почти всегда ApiTelegramException), а MAX — обычным
+# HTTP-статусом (у нас MaxApiHTTPException, raise_for_status срабатывает
+# раньше разбора тела). Телеботовский `except ApiTelegramException`
+# должен ловить оба вида. Учтите: error_code у MAX — строка
+# ('attachment.not.ready'), не телеграмный int (429).
+ApiException = MaxApiException
+ApiHTTPException = MaxApiHTTPException
+ApiInvalidJSONException = MaxApiInvalidJSONException
+ApiTelegramException = MaxApiException

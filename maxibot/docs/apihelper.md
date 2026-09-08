@@ -24,6 +24,9 @@ TLS: библиотека ходит на актуальный `https://platform
 
 Прокси: при `proxy = None` применяются прокси из переменных окружения `HTTP_PROXY`/`HTTPS_PROXY` — стандартное поведение requests и telebot (раньше maxibot их игнорировал). Отключить: `apihelper.proxy = {"http": "", "https": ""}` или переменная `NO_PROXY=platform-api2.max.ru`.
 
+## Телеботовские имена исключений
+В `maxibot.apihelper` (и в `maxibot.exceptions`) есть алиасы, чтобы `except`-код переезжал заменой импорта: `ApiException` → `MaxApiException`, `ApiHTTPException` → `MaxApiHTTPException`, `ApiInvalidJSONException` → `MaxApiInvalidJSONException`. `ApiTelegramException` — алиас на **базовый** `MaxApiException`: Telegram шлёт осмысленные ошибки JSON-телом, а MAX — обычным HTTP-статусом (`MaxApiHTTPException`), и телеботовский `except ApiTelegramException` должен ловить оба вида. Учтите: `error_code` у MAX — строка (`'attachment.not.ready'`), не телеграмный int (`429`).
+
 ## class maxibot.apihelper.Api(token)
 Клиент для рабты с api MAX  
 **Параметры:**

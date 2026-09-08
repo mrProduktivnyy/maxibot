@@ -3,6 +3,15 @@ from typing import Dict, Any, List, Optional
 from urllib.parse import quote
 
 from maxibot.core.network.client import Client
+# телеботовские имена исключений живут в telebot.apihelper — зеркалим,
+# чтобы `from telebot.apihelper import ApiTelegramException` переезжал
+# заменой слова (алиасы определены в maxibot.exceptions)
+from maxibot.exceptions import (
+    ApiException,
+    ApiHTTPException,
+    ApiInvalidJSONException,
+    ApiTelegramException,
+)
 
 
 # Модульные настройки сетевого слоя — аналог одноимённых в telebot.apihelper;

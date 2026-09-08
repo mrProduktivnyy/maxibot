@@ -13,7 +13,9 @@ import traceback
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Callable, Union
 
-from maxibot import apihelper, util
+# formatting — в списке ради maxibot.formatting.* после голого import
+# maxibot (у telebot так; callback_data telebot не экспонирует — и мы нет)
+from maxibot import apihelper, formatting, util
 from maxibot.apihelper import Api
 from maxibot.types import Chat, ChatMember, ChatMemberUpdated, Message, CallbackQuery, InputMedia, MessageID, Update, User
 from maxibot.types import BotCommand, BotName, BotDescription, BotShortDescription
