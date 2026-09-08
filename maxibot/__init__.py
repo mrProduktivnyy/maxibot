@@ -17,7 +17,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 # maxibot (у telebot так; callback_data telebot не экспонирует — и мы нет)
 from maxibot import apihelper, formatting, util
 from maxibot.apihelper import Api
-from maxibot.types import Chat, ChatMember, ChatMemberUpdated, Message, CallbackQuery, InputMedia, MessageID, Update, User
+from maxibot.types import Chat, ChatMember, ChatMemberUpdated, CommentRemoved, Message, CallbackQuery, InputMedia, MessageID, Update, User
 from maxibot.types import BotCommand, BotName, BotDescription, BotShortDescription
 from maxibot.types import File, Video
 from maxibot.types import UpdateType, InlineKeyboardMarkup
@@ -341,6 +341,10 @@ class MaxiBot:
         self.edited_message_handlers = []
         self.channel_post_handlers = []
         self.edited_channel_post_handlers = []
+        # комментарии к постам каналов — MAX-бонус, аналога в telebot нет
+        self.comment_handlers = []
+        self.edited_comment_handlers = []
+        self.removed_comment_handlers = []
         self.callback_query_handlers = []
         self.my_chat_member_handlers = []
         self.chat_member_handlers = []
@@ -1258,6 +1262,218 @@ class MaxiBot:
         )
         self.add_edited_channel_post_handler(handler_dict)
 
+    def comment_handler(
+        self,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        content_types: Optional[List[str]] = None,
+        **kwargs
+    ):
+        """
+        Декоратор обработчика комментариев к постам каналов — MAX-бонус,
+        аналога в telebot нет (обновление comment_created; Telegram Bot
+        API комментарии каналов ботам не отдаёт вовсе). Обработчик
+        получает Message: комментарий приходит в формате сообщения,
+        message.chat — чат канала, reply_to_message.message_id —
+        mid того, на что комментарий отвечает (если отвечает).
+        Фильтры как у message_handler.
+
+        .. code-block:: python3
+
+            @bot.comment_handler(content_types=['text'])
+            def on_comment(message):
+                bot.send_comment(...)
+
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param content_types: Типы контента (по умолчанию ['text'])
+        :param kwargs: Кастом-фильтры (add_custom_filter)
+        """
+        content_types, commands = self._prepare_message_filters(content_types, commands)
+
+        def decorator(funcs: HandlerFunc):
+            handler_dict = self._build_handler_dict(
+                funcs,
+                content_types=content_types,
+                commands=commands,
+                regexp=regexp,
+                func=func,
+                **kwargs
+            )
+            self.add_comment_handler(handler_dict)
+            return funcs
+        return decorator
+
+    def add_comment_handler(self, handler_dict):
+        """
+        Добавляет обработчик комментариев напрямую (словарь
+        из _build_handler_dict)
+        """
+        self.comment_handlers.append(handler_dict)
+
+    def register_comment_handler(
+        self,
+        callback: Callable,
+        content_types: Optional[List[str]] = None,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        pass_bot: Optional[bool] = False,
+        **kwargs
+    ):
+        """
+        Недекораторная регистрация обработчика комментариев.
+        pass_bot=True — бот приходит именованным аргументом bot. Без
+        content_types матчит комментарии любого типа (дефолт ['text']
+        подставляют только декораторы — та же логика, что у
+        register_message_handler).
+
+        :param callback: Функция-обработчик
+        :param content_types: Типы контента (None — все)
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
+        """
+        content_types, commands = self._prepare_message_filters(
+            content_types, commands, default_text=False)
+        handler_dict = self._build_handler_dict(
+            callback,
+            pass_bot=pass_bot,
+            content_types=content_types,
+            commands=commands,
+            regexp=regexp,
+            func=func,
+            **kwargs
+        )
+        self.add_comment_handler(handler_dict)
+
+    def edited_comment_handler(
+        self,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        content_types: Optional[List[str]] = None,
+        **kwargs
+    ):
+        """
+        Декоратор обработчика ПРАВОК комментариев (обновление
+        comment_edited) — MAX-бонус. Остальное — как
+        у comment_handler.
+
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param content_types: Типы контента (по умолчанию ['text'])
+        :param kwargs: Кастом-фильтры (add_custom_filter)
+        """
+        content_types, commands = self._prepare_message_filters(content_types, commands)
+
+        def decorator(funcs: HandlerFunc):
+            handler_dict = self._build_handler_dict(
+                funcs,
+                content_types=content_types,
+                commands=commands,
+                regexp=regexp,
+                func=func,
+                **kwargs
+            )
+            self.add_edited_comment_handler(handler_dict)
+            return funcs
+        return decorator
+
+    def add_edited_comment_handler(self, handler_dict):
+        """
+        Добавляет обработчик правок комментариев напрямую (словарь
+        из _build_handler_dict)
+        """
+        self.edited_comment_handlers.append(handler_dict)
+
+    def register_edited_comment_handler(
+        self,
+        callback: Callable,
+        content_types: Optional[List[str]] = None,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        pass_bot: Optional[bool] = False,
+        **kwargs
+    ):
+        """
+        Недекораторная регистрация обработчика правок комментариев.
+        Без content_types матчит правки любого типа
+        (см. register_comment_handler).
+
+        :param callback: Функция-обработчик
+        :param content_types: Типы контента (None — все)
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
+        """
+        content_types, commands = self._prepare_message_filters(
+            content_types, commands, default_text=False)
+        handler_dict = self._build_handler_dict(
+            callback,
+            pass_bot=pass_bot,
+            content_types=content_types,
+            commands=commands,
+            regexp=regexp,
+            func=func,
+            **kwargs
+        )
+        self.add_edited_comment_handler(handler_dict)
+
+    def removed_comment_handler(self, func: Optional[Callable] = None, **kwargs):
+        """
+        Декоратор обработчика УДАЛЕНИЙ комментариев (обновление
+        comment_removed) — MAX-бонус. Обработчик получает
+        types.CommentRemoved: самого комментария в событии нет, только
+        message_id (id удалённого комментария), chat_id, user_id (кто
+        удалил), post_id (mid поста) и timestamp — поэтому текстовых
+        фильтров здесь нет, только func и кастом-фильтры.
+
+        :param func: Функция-фильтр (получает CommentRemoved)
+        :param kwargs: Кастом-фильтры (add_custom_filter)
+        """
+        def decorator(handler):
+            handler_dict = self._build_handler_dict(handler, func=func, **kwargs)
+            self.add_removed_comment_handler(handler_dict)
+            return handler
+        return decorator
+
+    def add_removed_comment_handler(self, handler_dict):
+        """
+        Добавляет обработчик удалений комментариев напрямую (словарь
+        из _build_handler_dict)
+        """
+        self.removed_comment_handlers.append(handler_dict)
+
+    def register_removed_comment_handler(
+        self,
+        callback: Callable,
+        func: Optional[Callable] = None,
+        pass_bot: Optional[bool] = False,
+        **kwargs
+    ):
+        """
+        Недекораторная регистрация обработчика удалений комментариев.
+        pass_bot=True — бот приходит именованным аргументом bot.
+
+        :param callback: Функция-обработчик (получает CommentRemoved)
+        :param func: Функция-фильтр
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
+        """
+        handler_dict = self._build_handler_dict(
+            callback, pass_bot=pass_bot, func=func, **kwargs
+        )
+        self.add_removed_comment_handler(handler_dict)
+
     def process_new_updates(self, updates: List[Union[Update, Dict[str, Any]]]):
         """
         Прогоняет список обновлений через весь пайплайн бота (middleware,
@@ -1441,6 +1657,39 @@ class MaxiBot:
         for message in new_edited_channel_post:
             self.run_handler(context=message,
                              message_handlers=self.edited_channel_post_handlers)
+
+    def process_new_comments(self, new_comments: List[Message]):
+        """
+        Прогоняет комментарии к постам по обработчикам comment_handler
+        (публичная точка пайплайна; MAX-бонус)
+
+        :param new_comments: Список комментариев (Message)
+        """
+        for message in new_comments:
+            self.run_handler(context=message,
+                             message_handlers=self.comment_handlers)
+
+    def process_new_edited_comments(self, new_edited_comments: List[Message]):
+        """
+        Прогоняет правки комментариев по обработчикам
+        edited_comment_handler (MAX-бонус)
+
+        :param new_edited_comments: Список правок комментариев (Message)
+        """
+        for message in new_edited_comments:
+            self.run_handler(context=message,
+                             message_handlers=self.edited_comment_handlers)
+
+    def process_new_removed_comments(self, new_removed_comments: List[CommentRemoved]):
+        """
+        Прогоняет удаления комментариев по обработчикам
+        removed_comment_handler (MAX-бонус)
+
+        :param new_removed_comments: Список событий CommentRemoved
+        """
+        for removed in new_removed_comments:
+            self.run_handler(context=removed,
+                             message_handlers=self.removed_comment_handlers)
 
     def my_chat_member_handler(self, func=None, **kwargs):
         """
@@ -2362,6 +2611,14 @@ class MaxiBot:
                 update_type in (UpdateType.USER_ADDED, UpdateType.USER_REMOVED)
                 and bool(self.chat_member_handlers
                          or self.typed_middleware_handlers.get("chat_member"))
+            ) or (
+                # комментарии — только при подписке: Message ради
+                # названия чата ходит в API
+                update_type == UpdateType.COMMENT_CREATED and bool(self.comment_handlers)
+            ) or (
+                update_type == UpdateType.COMMENT_EDITED and bool(self.edited_comment_handlers)
+            ) or (
+                update_type == UpdateType.COMMENT_REMOVED and bool(self.removed_comment_handlers)
             )
             if not has_handlers and not (
                 self.default_middleware_handlers or self.typed_middleware_handlers.get(update_type)
@@ -2428,6 +2685,12 @@ class MaxiBot:
                 self.process_new_edited_messages([upd.edited_message])
             elif upd.callback_query is not None:
                 self.process_new_callback_query([upd.callback_query])
+            elif upd.comment is not None:
+                self.process_new_comments([upd.comment])
+            elif upd.edited_comment is not None:
+                self.process_new_edited_comments([upd.edited_comment])
+            elif upd.removed_comment is not None:
+                self.process_new_removed_comments([upd.removed_comment])
         except Exception as e:
             self._report_exception(e, "Error while processing update")
 
@@ -4146,6 +4409,219 @@ class MaxiBot:
         """
         self.api.send_message(msg_id=message_id, method="DELETE")
         return {}
+
+    def get_comments(
+        self,
+        message_id: str,
+        count: Optional[int] = None,
+        before: Optional[int] = None,
+        after: Optional[int] = None,
+        comment_ids: Optional[List[str]] = None,
+        timeout: Optional[int] = None,
+    ) -> List[Message]:
+        """
+        Возвращает комментарии к посту канала — MAX-бонус, аналога
+        в telebot нет (Telegram Bot API комментарии каналов ботам
+        не отдаёт). GET /messages/{messageId}/comments; блока
+        комментариев нет в OpenAPI-спеке MAX — методы выверены
+        по официальному TS-клиенту.
+
+        :param message_id: mid поста (message.message_id)
+        :type message_id: str
+
+        :param count: Максимум комментариев в ответе
+        :type count: Optional[int]
+
+        :param before: Только комментарии ДО этой метки времени
+        :type before: Optional[int]
+
+        :param after: Только комментарии ПОСЛЕ этой метки времени
+        :type after: Optional[int]
+
+        :param comment_ids: Забрать только эти id комментариев
+        :type comment_ids: Optional[List[str]]
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: Список комментариев в виде Message
+        :rtype: List[Message]
+        """
+        response = self.api.get_comments(
+            message_id, count=count, before=before, after=after,
+            comment_ids=comment_ids, timeout=timeout or None
+        )
+        comments = response.get("messages") if isinstance(response, dict) else None
+        return [
+            Message(update={"message": comment, "timestamp": comment.get("timestamp")},
+                    api=self.api)
+            for comment in comments or ()
+            if isinstance(comment, dict)
+        ]
+
+    def get_comment(
+        self,
+        message_id: str,
+        comment_id: str,
+        timeout: Optional[int] = None,
+    ) -> Message:
+        """
+        Возвращает один комментарий к посту канала — MAX-бонус
+        (GET /messages/{messageId}/comments/{commentId}).
+
+        :param message_id: mid поста
+        :type message_id: str
+
+        :param comment_id: id комментария
+        :type comment_id: str
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: Комментарий в виде Message
+        :rtype: Message
+        """
+        comment = self.api.get_comment(message_id, comment_id, timeout=timeout or None)
+        return Message(
+            update={"message": comment,
+                    "timestamp": comment.get("timestamp") if isinstance(comment, dict) else None},
+            api=self.api
+        )
+
+    def send_comment(
+        self,
+        message_id: str,
+        text: Optional[str] = None,
+        link: Optional[Dict[str, Any]] = None,
+        parse_mode: Optional[str] = None,
+        disable_link_preview: Optional[bool] = None,
+        timeout: Optional[int] = None,
+    ) -> Message:
+        """
+        Отправляет комментарий к посту канала — MAX-бонус
+        (POST /messages/{messageId}/comments).
+
+        .. code-block:: python3
+
+            @bot.comment_handler(content_types=['text'])
+            def on_comment(message):
+                # ответить на комментарий под тем же постом
+                bot.send_comment(message.reply_to_message.message_id or ...,
+                                 'Спасибо за комментарий!')
+
+        :param message_id: mid поста, под которым комментируем
+        :type message_id: str
+
+        :param text: Текст комментария
+        :type text: Optional[str]
+
+        :param link: Ссылка на другой комментарий —
+            {"type": "reply"|"forward", "mid": "<id>"}
+        :type link: Optional[Dict[str, Any]]
+
+        :param parse_mode: Разметка (markdown/html). Если не задана,
+            берётся общая разметка бота — MaxiBot(token, parse_mode=...);
+            если и там пусто — markdown, как у send_message.
+            Пустая строка отключает разметку
+        :type parse_mode: Optional[str]
+
+        :param disable_link_preview: True — сервер не строит превью
+            для ссылок в тексте
+        :type disable_link_preview: Optional[bool]
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: Отправленный комментарий в виде Message
+        :rtype: Message
+        """
+        if text and self._check_text_length(text=text):
+            raise ValueError(f'text должен быть меньше 4000 символов\nСейчас их {len(text)}')
+        return Message(
+            update=self.api.send_comment(
+                message_id,
+                text=text,
+                link=link,
+                format=self._resolve_parse_mode(parse_mode, default="markdown"),
+                disable_link_preview=disable_link_preview,
+                timeout=timeout or None,
+            ),
+            api=self.api
+        )
+
+    def edit_comment(
+        self,
+        message_id: str,
+        comment_id: str,
+        text: Optional[str] = None,
+        link: Optional[Dict[str, Any]] = None,
+        parse_mode: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ) -> bool:
+        """
+        Правит комментарий к посту канала — MAX-бонус
+        (PUT /messages/{messageId}/comments).
+
+        :param message_id: mid поста
+        :type message_id: str
+
+        :param comment_id: id комментария, который правим
+        :type comment_id: str
+
+        :param text: Новый текст
+        :type text: Optional[str]
+
+        :param link: Новая ссылка {"type": ..., "mid": ...}
+        :type link: Optional[Dict[str, Any]]
+
+        :param parse_mode: Разметка (markdown/html). Если не задана,
+            берётся общая разметка бота; если и там пусто — текст
+            уходит без разметки (как у edit_message_text)
+        :type parse_mode: Optional[str]
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: True при успехе; False, если MAX ответил success: false
+        :rtype: bool
+        """
+        if text and self._check_text_length(text=text):
+            raise ValueError(f'text должен быть меньше 4000 символов\nСейчас их {len(text)}')
+        response = self.api.edit_comment(
+            message_id, comment_id,
+            text=text,
+            link=link,
+            format=self._resolve_parse_mode(parse_mode),
+            timeout=timeout or None,
+        )
+        return bool(isinstance(response, dict) and response.get("success", False))
+
+    def delete_comment(
+        self,
+        message_id: str,
+        comment_id: str,
+        timeout: Optional[int] = None,
+    ) -> bool:
+        """
+        Удаляет комментарий к посту канала — MAX-бонус
+        (DELETE /messages/{messageId}/comments).
+
+        :param message_id: mid поста
+        :type message_id: str
+
+        :param comment_id: id комментария
+        :type comment_id: str
+
+        :param timeout: Таймаут запроса в секундах (0 — модульные, как в telebot)
+        :type timeout: Optional[int]
+
+        :return: True при успехе; False, если MAX ответил success: false
+        :rtype: bool
+        """
+        response = self.api.delete_comment(
+            message_id, comment_id, timeout=timeout or None
+        )
+        return bool(isinstance(response, dict) and response.get("success", False))
 
     def edit_message_text(
         self,

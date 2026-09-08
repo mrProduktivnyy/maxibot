@@ -165,6 +165,14 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **url** (`str`) - Публичное имя (username) бота (ведущий @ отбрасывается) или ссылка на него — поле web_app кнопки open_app; None допустим, если задан contact_id. Адрес самого приложения сюда не подходит — будет предупреждение в лог  
 * **contact_id** (`int`) - ID бота, чьё мини-приложение надо открыть — поле contact_id кнопки open_app (только в MAX)  
 * **payload** (`str`) - Параметр запуска, который попадёт в initData мини-приложения — поле payload кнопки open_app (только в MAX)  
+## class maxibot.types.CommentRemoved(update: Dict[str, Any])
+Событие удаления комментария к посту канала (обновление comment_removed) — MAX-бонус, аналога в telebot нет. Его получает removed_comment_handler; самого комментария в событии нет  
+**Параметры:**
+* **message_id** (`str`) - id удалённого комментария (комментарий — тоже сообщение)  
+* **chat_id** - Чат канала  
+* **user_id** - Кто удалил  
+* **post_id** (`Optional[str]`) - mid поста, под которым был комментарий  
+* **timestamp** (`int`) - Время события  
 ## class maxibot.types.Update(update: Dict[str, Any], api: Optional[Api])
 Обновление от MAX API целиком (аналог `telebot.types.Update`) — его получают middleware без update_types и возвращает `bot.get_updates()`. Заполнено только поле своего типа, сырой payload всегда в `json`  
 **Параметры:**
@@ -172,6 +180,7 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **update_type** (`str`) / **timestamp** (`int`) - Тип и время события  
 * **message** / **edited_message** / **callback_query** - Объекты своего типа; в них те же экземпляры, что уйдут в обработчики, поэтому атрибуты, выставленные в middleware, видны и обработчикам  
 * **my_chat_member** / **chat_member** (`ChatMemberUpdated`) - События членства; подставляет бот при обработке, без подписки — None  
+* **comment** / **edited_comment** (`Message`) / **removed_comment** (`CommentRemoved`) - Комментарии к постам каналов (MAX-бонус): comment_created/comment_edited несут комментарий в формате сообщения, comment_removed — только идентификаторы  
 * **channel_post** / **edited_channel_post** / **update_id** - Телеботовские поля, которых в MAX нет: всегда None, чтобы перенесённый код не падал с AttributeError. Маркер пачки вместо update_id — в `bot.last_update_id`  
 * **api** - Клиент API, которым построены объекты; None — обновление сырое (см. de_json)  
 
@@ -194,6 +203,6 @@ MAX API документация https://dev.max.ru/docs-api/objects/Update
 * **DIALOG_MUTED** (`str`) - Пользователь отключил уведомления диалога с ботом  
 * **DIALOG_UNMUTED** (`str`) - Пользователь включил уведомления диалога с ботом  
 * **DIALOG_REMOVED** (`str`) - Пользователь удалил диалог с ботом  
-* **COMMENT_CREATED** (`str`) - Создан комментарий  
-* **COMMENT_EDITED** (`str`) - Комментарий изменён  
-* **COMMENT_REMOVED** (`str`) - Комментарий удалён  
+* **COMMENT_CREATED** (`str`) - Создан комментарий к посту канала (обработчик — comment_handler)  
+* **COMMENT_EDITED** (`str`) - Комментарий изменён (edited_comment_handler)  
+* **COMMENT_REMOVED** (`str`) - Комментарий удалён (removed_comment_handler, объект CommentRemoved)  

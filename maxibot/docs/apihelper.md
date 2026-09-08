@@ -52,6 +52,11 @@ TLS: библиотека ходит на актуальный `https://platform
     * `parse_mode` - Формат текста сообщения (`Markdown`, `HTML`)  
     * `notify` - Флаг звукового уведомления; False уходит в тело явно (у NewMessageBody.notify серверный default true, пропуск поля звук не отключает)  
     * `timeout` - Таймаут HTTP-запроса в секундах на этот вызов; None — модульные CONNECT_TIMEOUT/READ_TIMEOUT  
+* **get_comments** (`message_id`, `count`, `before`, `after`, `comment_ids`, `timeout`) - Комментарии к посту канала (`GET /messages/{messageId}/comments`); comment_ids-список уходит query-параметром через запятую. Блока комментариев нет в OpenAPI-спеке MAX — методы выверены по официальному TS-клиенту (CommentsApi)  
+* **get_comment** (`message_id`, `comment_id`, `timeout`) - Один комментарий (`GET /messages/{messageId}/comments/{commentId}`)  
+* **send_comment** (`message_id`, `text`, `link`, `format`, `disable_link_preview`, `timeout`) - Комментарий к посту (`POST /messages/{messageId}/comments`); disable_link_preview — query-параметр строкой true/false, format уходит только вместе с текстом (как у send_message)  
+* **edit_comment** (`message_id`, `comment_id`, `text`, `link`, `format`, `timeout`) - Правка комментария (`PUT /messages/{messageId}/comments`); message_id уходит и в путь, и в query — TS-клиент кладёт его с comment_id в query при том же шаблоне пути  
+* **delete_comment** (`message_id`, `comment_id`, `timeout`) - Удаление комментария (`DELETE /messages/{messageId}/comments?comment_id=...`)  
 * **answer_callback**(`callback_id`,`text`,`notification`, `attachments`, `link`, `notify`, `format`)  
     * `callback_id` - Уникальный идентификатор callback-запроса
     * `text` - Новый текст сообщения. Если указан, сообщение будет обновлено  

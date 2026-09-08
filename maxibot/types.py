@@ -1929,6 +1929,26 @@ class CallbackQuery:
         return self.answer(text=text, **kwargs)
 
 
+class CommentRemoved(JsonDeserializable):
+    """
+    Событие удаления комментария к посту канала (обновление
+    comment_removed) — MAX-бонус, аналога в telebot нет. Самого
+    комментария в событии нет, только идентификаторы (как
+    у message_removed).
+
+    :param update: Обновление от MAX API с типом 'comment_removed'
+    :type update: Dict[str, Any]
+    """
+
+    def __init__(self, update: Dict[str, Any]):
+        # имена полей как в обновлении MAX (комментарий - тоже сообщение)
+        self.message_id: Optional[str] = update.get("message_id")  # id удалённого комментария
+        self.chat_id = update.get("chat_id")
+        self.user_id = update.get("user_id")    # кто удалил
+        self.post_id: Optional[str] = update.get("post_id")  # mid поста, под которым был комментарий
+        self.timestamp: Optional[int] = update.get("timestamp")
+
+
 class Update(JsonDeserializable):
     """
     Обновление от MAX API целиком (аналог telebot.types.Update). Его
@@ -2014,6 +2034,12 @@ class Update(JsonDeserializable):
         # бота, которого у Update нет; без подписки остаются None
         self.my_chat_member = None
         self.chat_member = None
+        # комментарии к постам каналов — MAX-бонус, аналога в telebot
+        # нет: comment_created/comment_edited несут комментарий
+        # в формате сообщения, comment_removed — только идентификаторы
+        self.comment: Optional[Message] = None
+        self.edited_comment: Optional[Message] = None
+        self.removed_comment: Optional[CommentRemoved] = None
         if api is None:
             # отложенный разбор (Update.de_json без api): без клиента
             # объекты не построить — Chat ходит за названием чата
@@ -2043,6 +2069,13 @@ class Update(JsonDeserializable):
                 self.edited_message = Message(update=update, api=api)
             elif self.update_type == UpdateType.MESSAGE_CALLBACK and "callback" in update:
                 self.callback_query = CallbackQuery(update=update, api=api)
+            elif self.update_type == UpdateType.COMMENT_CREATED and "message" in update:
+                # комментарий приходит в формате сообщения (как message_created)
+                self.comment = Message(update=update, api=api)
+            elif self.update_type == UpdateType.COMMENT_EDITED and "message" in update:
+                self.edited_comment = Message(update=update, api=api)
+            elif self.update_type == UpdateType.COMMENT_REMOVED:
+                self.removed_comment = CommentRemoved(update)
         except Exception:
             # payload, который парсер не понял (например, сообщение без
             # recipient): общие middleware всё равно получат Update с сырым

@@ -218,6 +218,141 @@ class Api:
 
         return self.client.request(method, "/messages", params=params, data=data, timeout=timeout)
 
+    def get_comments(self, message_id, count=None, before=None, after=None,
+                     comment_ids=None, timeout=None):
+        """
+        Апи метод получения комментариев к посту канала
+        (GET /messages/{messageId}/comments).
+
+        Блока комментариев нет в OpenAPI-спеке MAX — методы выверены
+        по официальному TS-клиенту (CommentsApi).
+
+        :param message_id: mid поста, к которому идут комментарии
+        :param count: Максимум комментариев в ответе
+        :param before: Отдать комментарии ДО этой метки времени
+        :param after: Отдать комментарии ПОСЛЕ этой метки времени
+        :param comment_ids: Список id комментариев — забрать только их
+            (уходит query-параметром через запятую)
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: {"messages": [<комментарий в формате сообщения>]}
+        :rtype: Dict[str, Any]
+        """
+        params = {}
+        if count is not None:
+            params["count"] = count
+        if before is not None:
+            params["before"] = before
+        if after is not None:
+            params["after"] = after
+        if comment_ids is not None:
+            if isinstance(comment_ids, (list, tuple, set)):
+                comment_ids = ",".join(str(c) for c in comment_ids)
+            params["comment_ids"] = comment_ids
+        return self.client.request(
+            "GET", f"/messages/{message_id}/comments", params=params, timeout=timeout
+        )
+
+    def get_comment(self, message_id, comment_id, timeout=None):
+        """
+        Апи метод получения одного комментария
+        (GET /messages/{messageId}/comments/{commentId}).
+
+        :param message_id: mid поста
+        :param comment_id: id комментария
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: Комментарий в формате сообщения (sender, recipient,
+            timestamp, link, body)
+        :rtype: Dict[str, Any]
+        """
+        return self.client.request(
+            "GET", f"/messages/{message_id}/comments/{comment_id}", timeout=timeout
+        )
+
+    def send_comment(self, message_id, text=None, link=None, format=None,
+                     disable_link_preview=None, timeout=None):
+        """
+        Апи метод отправки комментария к посту канала
+        (POST /messages/{messageId}/comments).
+
+        :param message_id: mid поста
+        :param text: Текст комментария
+        :param link: Ссылка на другой комментарий — словарь
+            {"type": "reply"|"forward", "mid": "<id>"}
+        :param format: Разметка текста (markdown/html)
+        :param disable_link_preview: True — сервер не строит превью
+            для ссылок в тексте (query-параметр, как у POST /messages)
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: {"message": <комментарий в формате сообщения>}
+        :rtype: Dict[str, Any]
+        """
+        params = {}
+        # requests сериализует Python bool как "True"/"False", MAX ждёт
+        # нижний регистр — шлём строкой (как в send_message)
+        if disable_link_preview is not None:
+            params["disable_link_preview"] = "true" if disable_link_preview else "false"
+        data = {}
+        if text:
+            data["text"] = text
+        if link:
+            data["link"] = link
+        if text and format:
+            data["format"] = format
+        return self.client.request(
+            "POST", f"/messages/{message_id}/comments",
+            params=params, data=data, timeout=timeout
+        )
+
+    def edit_comment(self, message_id, comment_id, text=None, link=None,
+                     format=None, timeout=None):
+        """
+        Апи метод правки комментария (PUT /messages/{messageId}/comments).
+
+        message_id уходит и в путь, и в query: TS-клиент кладёт
+        message_id с comment_id в query при том же шаблоне пути.
+
+        :param message_id: mid поста
+        :param comment_id: id комментария, который правим
+        :param text: Новый текст
+        :param link: Новая ссылка {"type": ..., "mid": ...}
+        :param format: Разметка текста (markdown/html)
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: ActionResponse {"success": bool}
+        :rtype: Dict[str, Any]
+        """
+        params = {"message_id": message_id, "comment_id": comment_id}
+        data = {}
+        if text:
+            data["text"] = text
+        if link:
+            data["link"] = link
+        if text and format:
+            data["format"] = format
+        return self.client.request(
+            "PUT", f"/messages/{message_id}/comments",
+            params=params, data=data, timeout=timeout
+        )
+
+    def delete_comment(self, message_id, comment_id, timeout=None):
+        """
+        Апи метод удаления комментария
+        (DELETE /messages/{messageId}/comments?comment_id=...).
+
+        :param message_id: mid поста
+        :param comment_id: id комментария
+        :param timeout: Таймаут запроса в секундах на этот вызов
+
+        :return: ActionResponse {"success": bool}
+        :rtype: Dict[str, Any]
+        """
+        return self.client.request(
+            "DELETE", f"/messages/{message_id}/comments",
+            params={"comment_id": comment_id}, timeout=timeout
+        )
+
     def get_upload_file_url(self, type_attach: str):
         """
         Апи метод для получения url загрузки файла.
