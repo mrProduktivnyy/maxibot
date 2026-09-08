@@ -7117,3 +7117,284 @@ class MaxiBot:
         :param kwargs: Дополнительные фильтры telebot (игнорируются)
         """
         self._warn_inline_handler_unsupported(callback)
+
+    @staticmethod
+    def check_commands_input(commands, method_name):
+        """
+        Клиентский валидатор фильтра commands — как
+        telebot.check_commands_input (в telebot помечен :meta private:,
+        но имя публичное): если commands не список строк, пишет ошибку
+        в лог. API не дёргает.
+
+        :meta private:
+        """
+        if not isinstance(commands, list) or not all(isinstance(item, str) for item in commands):
+            logger.error(
+                f"{method_name}: Commands filter should be list of strings "
+                f"(commands), unknown type supplied to the 'commands' filter "
+                f"list. Not able to use the supplied type."
+            )
+
+    @staticmethod
+    def check_regexp_input(regexp, method_name):
+        """
+        Клиентский валидатор фильтра regexp — как
+        telebot.check_regexp_input: если regexp не строка, пишет ошибку
+        в лог. API не дёргает.
+
+        :meta private:
+        """
+        if not isinstance(regexp, str):
+            logger.error(
+                f"{method_name}: Regexp filter should be string. "
+                f"Not able to use the supplied type."
+            )
+
+    def delete_messages(self, chat_id: Union[int, str], message_ids: List[str]):
+        """
+        Удаляет несколько сообщений — сигнатура как
+        telebot.delete_messages. Пакетного удаления в MAX нет (DELETE
+        /messages принимает ровно одно message_id), поэтому удаляем
+        циклом по delete_message.
+
+        Как в Telegram («If some of the specified messages can't be
+        found, they are skipped»): сообщение, которое удалить
+        не вышло, пропускается с предупреждением в лог, остальные
+        удаляются дальше.
+
+        :param chat_id: Идентификатор чата (в MAX не используется —
+            message_id глобален; принимается для совместимости)
+        :type chat_id: Union[int, str]
+
+        :param message_ids: Список id сообщений
+        :type message_ids: List[str]
+
+        :return: True
+        :rtype: bool
+        """
+        for message_id in message_ids:
+            try:
+                self.delete_message(chat_id, message_id)
+            except MaxApiException as error:
+                logger.warning(
+                    "delete_messages: сообщение %s не удалено (%s) — "
+                    "пропущено, как в Telegram", message_id, error
+                )
+        return True
+
+    def get_user_profile_photos(self, user_id: int, offset: Optional[int] = None,
+                                limit: Optional[int] = None):
+        """
+        Пока не реализован в maxibot — вызов бросает NotImplementedError
+        (не AttributeError). Истории аватарок с file_id в MAX нет;
+        текущая аватарка пользователя доступна через
+        bot.get_chat_member(chat_id, user_id) — поля avatar_url
+        и full_avatar_url.
+
+        :raises NotImplementedError: всегда
+        """
+        raise NotImplementedError(
+            "get_user_profile_photos: в maxibot пока не реализован. Истории "
+            "аватарок с file_id в MAX нет; текущая аватарка — "
+            "bot.get_chat_member(chat_id, user_id).avatar_url / full_avatar_url"
+        )
+
+    def restrict_chat_member(self, *args, **kwargs):
+        """
+        Пока не реализован в maxibot — вызов бросает NotImplementedError
+        (не AttributeError). Прямого API ограничений в MAX нет; мьют
+        эмулируем реестром с авто-удалением сообщений — план есть,
+        реализация впереди. Для исключения из чата —
+        ban_chat_member (с блокировкой) или
+        bot.api.remove_chat_member(chat_id, user_id) (без).
+
+        :raises NotImplementedError: всегда
+        """
+        raise NotImplementedError(
+            "restrict_chat_member: в maxibot пока не реализован (прямого API "
+            "ограничений в MAX нет; мьют эмулируется авто-удалением — "
+            "в планах). Исключить из чата: ban_chat_member или "
+            "bot.api.remove_chat_member(chat_id, user_id)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Заглушки телеботовских методов, невозможных в MAX (полный список
+# с причинами и альтернативами — docs/not_in_max.md).
+#
+# Семантика — по прецедентам выше:
+# * действия (send_poll, create_forum_topic, ...) БРОСАЮТ
+#   NotImplementedError с объяснением — как answer_inline_query
+#   и unban_chat_member: перенесённый код падает с понятной причиной,
+#   а не тихо делает вид, что отправил опрос;
+# * регистрация обработчиков несуществующих событий (poll_handler,
+#   register_..., add_..., process_new_...) предупреждает в лог
+#   и ничего не делает — как inline_handler: перенесённый бот
+#   ЗАПУСКАЕТСЯ, остальные обработчики работают.
+#
+# Методы навешиваются на класс циклом из таблиц: 97 одинаковых заглушек
+# руками — это 97 мест для опечаток. Таблица - единственный источник.
+
+# фича -> причина (готовая вторая половина фразы «... — <причина>»)
+_MAX_MISSING_FEATURES = {
+    "polls": "опросов в MAX Bot API нет: ни метода отправки, ни обновлений poll/poll_answer",
+    "dice": "анимированных костей (dice) в MAX Bot API нет — отправьте эмодзи обычным сообщением",
+    "games": "игровой платформы (HTML5-игры) в MAX Bot API нет",
+    "payments": "платёжной платформы в MAX Bot API нет: ни инвойсов, ни событий shipping_query/pre_checkout_query",
+    "inline": "инлайн-режима в MAX Bot API нет (обновлений inline_query/chosen_inline_result не существует)",
+    "sticker_sets": "управления стикерпаками в MAX Bot API нет — стикер отправляется только готовым кодом: bot.send_sticker(chat_id, code)",
+    "forums": "форумов (топиков супергрупп) в MAX нет — супергрупп и тем не существует",
+    "invite_links": "именованных invite-ссылок в MAX Bot API нет — только постоянная ссылка чата: bot.get_chat(chat_id).invite_link",
+    "join_requests": "заявок на вступление в MAX Bot API нет (события chat_join_request не существует)",
+    "reactions": "реакций в MAX Bot API нет: ни метода, ни обновлений message_reaction/message_reaction_count",
+    "boosts": "бустов в MAX нет — ни методов, ни обновлений chat_boost/removed_chat_boost",
+    "sender_chats": "анонимных отправителей-чатов (sender_chat) в MAX нет",
+    "menu_button": "кнопки меню (menu button) в MAX Bot API нет — используйте команды (set_my_commands) и клавиатуры",
+    "default_admin_rights": "прав администратора по умолчанию в MAX Bot API нет — права выдаются при назначении: bot.promote_chat_member",
+    "chat_permissions": "общечатовых ограничений прав (ChatPermissions) в MAX Bot API нет — права выдаются только админам",
+    "session": "log_out/close в MAX не нужны и невозможны — локального Bot API сервера у MAX не существует",
+}
+
+# действие -> фича: вызов бросает NotImplementedError
+_MAX_IMPOSSIBLE_ACTIONS = {
+    "send_poll": "polls", "stop_poll": "polls",
+    "send_dice": "dice",
+    "send_game": "games", "set_game_score": "games", "get_game_high_scores": "games",
+    "send_invoice": "payments", "create_invoice_link": "payments",
+    "answer_shipping_query": "payments", "answer_pre_checkout_query": "payments",
+    "answer_web_app_query": "inline",
+    "add_sticker_to_set": "sticker_sets", "create_new_sticker_set": "sticker_sets",
+    "delete_chat_sticker_set": "sticker_sets", "delete_sticker_from_set": "sticker_sets",
+    "delete_sticker_set": "sticker_sets", "get_custom_emoji_stickers": "sticker_sets",
+    "get_sticker_set": "sticker_sets", "set_chat_sticker_set": "sticker_sets",
+    "set_custom_emoji_sticker_set_thumbnail": "sticker_sets",
+    "set_sticker_emoji_list": "sticker_sets", "set_sticker_keywords": "sticker_sets",
+    "set_sticker_mask_position": "sticker_sets", "set_sticker_position_in_set": "sticker_sets",
+    "set_sticker_set_thumb": "sticker_sets", "set_sticker_set_thumbnail": "sticker_sets",
+    "set_sticker_set_title": "sticker_sets", "upload_sticker_file": "sticker_sets",
+    "close_forum_topic": "forums", "close_general_forum_topic": "forums",
+    "create_forum_topic": "forums", "delete_forum_topic": "forums",
+    "edit_forum_topic": "forums", "edit_general_forum_topic": "forums",
+    "hide_general_forum_topic": "forums", "reopen_forum_topic": "forums",
+    "reopen_general_forum_topic": "forums", "unhide_general_forum_topic": "forums",
+    "unpin_all_forum_topic_messages": "forums",
+    "unpin_all_general_forum_topic_messages": "forums",
+    "get_forum_topic_icon_stickers": "forums",
+    "create_chat_invite_link": "invite_links", "edit_chat_invite_link": "invite_links",
+    "revoke_chat_invite_link": "invite_links",
+    "approve_chat_join_request": "join_requests", "decline_chat_join_request": "join_requests",
+    "set_message_reaction": "reactions",
+    "get_user_chat_boosts": "boosts",
+    "ban_chat_sender_chat": "sender_chats", "unban_chat_sender_chat": "sender_chats",
+    "get_chat_menu_button": "menu_button", "set_chat_menu_button": "menu_button",
+    "get_my_default_administrator_rights": "default_admin_rights",
+    "set_my_default_administrator_rights": "default_admin_rights",
+    "set_chat_permissions": "chat_permissions",
+    "log_out": "session", "close": "session",
+}
+
+# декоратор обработчика -> фича: @bot.poll_handler(...) предупреждает,
+# функцию возвращает как есть — событие никогда не придёт
+_MAX_DEAD_HANDLER_DECORATORS = {
+    "poll_handler": "polls", "poll_answer_handler": "polls",
+    "message_reaction_handler": "reactions", "message_reaction_count_handler": "reactions",
+    "chat_boost_handler": "boosts", "removed_chat_boost_handler": "boosts",
+    "chat_join_request_handler": "join_requests",
+    "pre_checkout_query_handler": "payments", "shipping_query_handler": "payments",
+}
+
+# add_/register_/process_new_ -> фича: предупреждает и ничего не делает
+_MAX_DEAD_HANDLER_CALLS = {
+    "add_poll_handler": "polls", "add_poll_answer_handler": "polls",
+    "register_poll_handler": "polls", "register_poll_answer_handler": "polls",
+    "process_new_poll": "polls", "process_new_poll_answer": "polls",
+    "add_message_reaction_handler": "reactions",
+    "add_message_reaction_count_handler": "reactions",
+    "register_message_reaction_handler": "reactions",
+    "register_message_reaction_count_handler": "reactions",
+    "process_new_message_reaction": "reactions",
+    "process_new_message_reaction_count": "reactions",
+    "add_chat_boost_handler": "boosts", "add_removed_chat_boost_handler": "boosts",
+    "register_chat_boost_handler": "boosts", "register_removed_chat_boost_handler": "boosts",
+    "process_new_chat_boost": "boosts", "process_new_removed_chat_boost": "boosts",
+    "add_chat_join_request_handler": "join_requests",
+    "register_chat_join_request_handler": "join_requests",
+    "process_new_chat_join_request": "join_requests",
+    "add_pre_checkout_query_handler": "payments", "add_shipping_query_handler": "payments",
+    "register_pre_checkout_query_handler": "payments",
+    "register_shipping_query_handler": "payments",
+    "process_new_pre_checkout_query": "payments", "process_new_shipping_query": "payments",
+    "add_inline_handler": "inline", "add_chosen_inline_handler": "inline",
+    "process_new_inline_query": "inline", "process_new_chosen_inline_query": "inline",
+}
+
+
+def _make_impossible_action(name: str, reason: str):
+    def stub(self, *args, **kwargs):
+        raise NotImplementedError(f"{name}: {reason}")
+
+    stub.__name__ = name
+    stub.__qualname__ = f"MaxiBot.{name}"
+    stub.__doc__ = (
+        f"Заглушка для совместимости с telebot.{name}: вызов всегда бросает "
+        f"NotImplementedError — {reason}. Принимает любые аргументы, чтобы "
+        f"перенесённый код падал с понятной причиной, а не с TypeError. "
+        f"См. docs/not_in_max.md"
+    )
+    return stub
+
+
+def _make_dead_handler_decorator(name: str, reason: str):
+    def stub(self, *args, **kwargs):
+        def decorator(handler):
+            logger.warning(
+                "Обработчик %s зарегистрирован через %s, но никогда не будет "
+                "вызван: %s", getattr(handler, "__name__", repr(handler)),
+                name, reason
+            )
+            return handler
+
+        return decorator
+
+    stub.__name__ = name
+    stub.__qualname__ = f"MaxiBot.{name}"
+    stub.__doc__ = (
+        f"Заглушка для совместимости с telebot.{name}: обработчик никогда "
+        f"не будет вызван — {reason}. Регистрация намеренно НЕ роняет бота "
+        f"(перенесённый код запускается), в лог пишется предупреждение. "
+        f"См. docs/not_in_max.md"
+    )
+    return stub
+
+
+def _make_dead_handler_call(name: str, reason: str):
+    def stub(self, *args, **kwargs):
+        logger.warning(
+            "%s: вызов принят, но обработчики этого события никогда "
+            "не сработают — %s", name, reason
+        )
+
+    stub.__name__ = name
+    stub.__qualname__ = f"MaxiBot.{name}"
+    stub.__doc__ = (
+        f"Заглушка для совместимости с telebot.{name}: ничего не делает — "
+        f"{reason}. В лог пишется предупреждение; бот продолжает работать. "
+        f"См. docs/not_in_max.md"
+    )
+    return stub
+
+
+for _name, _feature in _MAX_IMPOSSIBLE_ACTIONS.items():
+    # защита от тихого затирания настоящего метода будущей реализацией
+    assert not hasattr(MaxiBot, _name), f"{_name} уже реализован — убрать из таблицы заглушек"
+    setattr(MaxiBot, _name, _make_impossible_action(_name, _MAX_MISSING_FEATURES[_feature]))
+
+for _name, _feature in _MAX_DEAD_HANDLER_DECORATORS.items():
+    assert not hasattr(MaxiBot, _name), f"{_name} уже реализован — убрать из таблицы заглушек"
+    setattr(MaxiBot, _name, _make_dead_handler_decorator(_name, _MAX_MISSING_FEATURES[_feature]))
+
+for _name, _feature in _MAX_DEAD_HANDLER_CALLS.items():
+    assert not hasattr(MaxiBot, _name), f"{_name} уже реализован — убрать из таблицы заглушек"
+    setattr(MaxiBot, _name, _make_dead_handler_call(_name, _MAX_MISSING_FEATURES[_feature]))
+
+del _name, _feature
