@@ -871,9 +871,67 @@ class MaxiBot:
                 func=func,
                 **kwargs
             )
-            self.message_handlers.append(handler_dict)
+            self.add_message_handler(handler_dict)
             return funcs
         return decorator
+
+    def add_message_handler(self, handler_dict):
+        """
+        Добавляет обработчик сообщений напрямую (низкоуровневый способ —
+        как telebot.add_message_handler; обычно используйте декоратор
+        или register_message_handler)
+
+        :param handler_dict: Словарь из _build_handler_dict
+        """
+        self.message_handlers.append(handler_dict)
+
+    def register_message_handler(
+        self,
+        callback: Callable,
+        content_types: Optional[List[str]] = None,
+        commands: Optional[List[str]] = None,
+        regexp: Optional[str] = None,
+        func: Optional[Callable] = None,
+        chat_types: Optional[List[str]] = None,
+        pass_bot: Optional[bool] = False,
+        **kwargs
+    ):
+        """
+        Недекораторная регистрация обработчика сообщений — как
+        telebot.register_message_handler (удобно, когда обработчики
+        разнесены по файлам). С pass_bot=True обработчик получает бота
+        именованным аргументом: callback(message, bot=bot).
+
+        Как и в telebot, без content_types регистрация через register_
+        матчит сообщения ЛЮБОГО типа контента: телеботовские register_,
+        в отличие от одноимённых декораторов, дефолт ['text'] не
+        подставляют — повторяем ради переносимости (докстринг telebot
+        обещает ['text'], но код этого не делает).
+
+        :param callback: Функция-обработчик
+        :param content_types: Типы контента (None — все, как в telebot)
+        :param commands: Список команд
+        :param regexp: Регулярное выражение по тексту
+        :param func: Функция-фильтр
+        :param chat_types: Типы чатов — телеботовские имена
+            ('private'/'group'/'supergroup'/'channel'); сырые имена
+            MAX тоже принимаются
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter)
+        """
+        content_types, commands = self._prepare_message_filters(
+            content_types, commands, default_text=False)
+        handler_dict = self._build_handler_dict(
+            callback,
+            pass_bot=pass_bot,
+            chat_types=chat_types,
+            content_types=content_types,
+            commands=commands,
+            regexp=regexp,
+            func=func,
+            **kwargs
+        )
+        self.add_message_handler(handler_dict)
 
     def edited_message_handler(
         self,
@@ -5854,6 +5912,30 @@ class MaxiBot:
         :return: None
         """
         self.callback_query_handlers.append(handler_dict)
+
+    def register_callback_query_handler(
+        self,
+        callback: Callable,
+        func: Callable,
+        pass_bot: Optional[bool] = False,
+        **kwargs
+    ):
+        """
+        Недекораторная регистрация обработчика callback-запросов — как
+        telebot.register_callback_query_handler. func обязателен (как
+        в telebot; «любой коллбэк» — func=None). С pass_bot=True
+        обработчик получает бота именованным аргументом:
+        callback(call, bot=bot).
+
+        :param callback: Функция-обработчик
+        :param func: Функция-фильтр (или None — без фильтра)
+        :param pass_bot: Передавать бота в обработчик аргументом bot
+        :param kwargs: Кастом-фильтры (add_custom_filter); маячок data
+            тоже работает — это встроенный фильтр maxibot
+        """
+        handler_dict = self._build_handler_dict(
+            callback, pass_bot=pass_bot, func=func, **kwargs)
+        self.add_callback_query_handler(handler_dict)
 
     def process_new_callback_query(self, new_callback_queries: List[CallbackQuery]):
         """
