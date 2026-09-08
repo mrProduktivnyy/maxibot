@@ -1,2 +1,4 @@
 __pycache__/
 main_test.py
+smoke/local_config.py
+smoke/last_run.log
